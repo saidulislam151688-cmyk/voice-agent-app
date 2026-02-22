@@ -8,6 +8,7 @@
                 android:gradientRadius="120dp"
                 android:startColor="#2000E676"
                 android:endColor="@android:color/transparent"/>
+            <size android:width="120dp" android:height="120dp"/>
         </shape>
     </item>
     <!-- Inner gradient -->
@@ -16,9 +17,9 @@
             <gradient
                 android:type="radial"
                 android:gradientRadius="80dp"
-                android:startColor="@color/primary"
-                android:endColor="@color/primary_dark"
-                android:gradientCenter="0.5,0.5"/>
+                android:startColor="#FF00C853"
+                android:endColor="#FF00A844"/>
+            <size android:width="80dp" android:height="80dp"/>
         </shape>
     </item>
 </layer-list>
