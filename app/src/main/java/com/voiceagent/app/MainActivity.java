@@ -1,11 +1,8 @@
 package com.voiceagent.app;
 
 import android.Manifest;
-import android.content.BroadcastReceiver;
 import android.content.Context;
-import android.content.Intent;
 import android.content.pm.PackageManager;
-import android.media.AudioAttributes;
 import android.media.AudioFocusRequest;
 import android.media.AudioManager;
 import android.os.Build;
@@ -21,7 +18,6 @@ import android.util.Log;
 import android.view.View;
 import android.view.animation.AlphaAnimation;
 import android.view.animation.Animation;
-import android.view.animation.AnimationUtils;
 import android.view.animation.ScaleAnimation;
 import android.widget.Button;
 import android.widget.TextView;
@@ -33,7 +29,6 @@ import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
 
-import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.BufferedReader;
@@ -51,7 +46,7 @@ public class MainActivity extends AppCompatActivity {
     private static final String TAG = "VoiceAgent";
     private static final int PERMISSION_CODE = 100;
     
-    // Replace with your Groq API key
+    // Replace with your Groq API key - will be replaced by GitHub Actions
     private static final String GROQ_API_KEY = "YOUR_GROQ_API_KEY";
 
     // State Machine
@@ -66,17 +61,17 @@ public class MainActivity extends AppCompatActivity {
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
 
     // Components
-    private SpeechRecognizer speechRecognizer;
-    private TextToSpeech textToSpeech;
+    private SpeechRecognizer speechRecognizer = null;
+    private TextToSpeech textToSpeech = null;
+    private boolean isTTSReady = false;
+    private boolean isRecognitionReady = false;
     private ExecutorService executor;
     private AudioManager audioManager;
-    private AudioFocusRequest audioFocusRequest;
 
     // UI Elements
     private Button btnToggle;
     private TextView tvStatus, tvUser, tvAI, tvTitle, tvIcon;
     private View circleView, pulseView;
-    private View containerView;
 
     // Flags
     private boolean isConversationActive = false;
@@ -101,29 +96,26 @@ public class MainActivity extends AppCompatActivity {
         
         executor = Executors.newSingleThreadExecutor();
         
-        CallReceiver.setListener(this::onIncomingCall);
-        
-        Log.d(TAG, "Voice Agent started");
+        Log.d(TAG, "Voice Agent started - UI initialized");
     }
 
     private void initViews() {
-        try {
-            btnToggle = findViewById(R.id.btnToggle);
-            tvStatus = findViewById(R.id.tvStatus);
-            tvUser = findViewById(R.id.tvUser);
-            tvAI = findViewById(R.id.tvAI);
-            tvTitle = findViewById(R.id.tvTitle);
-            tvIcon = findViewById(R.id.tvIcon);
-            circleView = findViewById(R.id.circleView);
-            pulseView = findViewById(R.id.pulseView);
-            containerView = findViewById(R.id.containerView);
-            
-            if (btnToggle != null) {
-                btnToggle.setOnClickListener(v -> toggleConversation());
-            }
-        } catch (Exception e) {
-            Log.e(TAG, "Error initializing views: " + e.getMessage());
-        }
+        btnToggle = findViewById(R.id.btnToggle);
+        tvStatus = findViewById(R.id.tvStatus);
+        tvUser = findViewById(R.id.tvUser);
+        tvAI = findViewById(R.id.tvAI);
+        tvTitle = findViewById(R.id.tvTitle);
+        tvIcon = findViewById(R.id.tvIcon);
+        circleView = findViewById(R.id.circleView);
+        pulseView = findViewById(R.id.pulseView);
+        
+        btnToggle.setOnClickListener(v -> {
+            Log.d(TAG, "Toggle button clicked");
+            toggleConversation();
+        });
+        
+        // Initial UI update
+        updateUIState("idle");
     }
 
     private void initAudioManager() {
@@ -131,56 +123,143 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void initSpeechRecognition() {
-        try {
-            if (!SpeechRecognizer.isRecognitionAvailable(this)) {
-                showError("Speech recognition not available");
-                return;
-            }
-            
-            speechRecognizer = SpeechRecognizer.createSpeechRecognizer(this);
-            speechRecognizer.setRecognitionListener(new SafeRecognitionListener());
-        } catch (Exception e) {
-            Log.e(TAG, "Error initializing speech recognition: " + e.getMessage());
-            showError("Failed to initialize speech recognition");
+        if (!SpeechRecognizer.isRecognitionAvailable(this)) {
+            Log.e(TAG, "Speech recognition not available");
+            Toast.makeText(this, "Speech recognition not available", Toast.LENGTH_LONG).show();
+            return;
         }
+        
+        speechRecognizer = SpeechRecognizer.createSpeechRecognizer(this);
+        speechRecognizer.setRecognitionListener(new RecognitionListener() {
+            @Override
+            public void onReadyForSpeech(Bundle params) {
+                Log.d(TAG, "Ready for speech");
+            }
+
+            @Override
+            public void onBeginningOfSpeech() {}
+
+            @Override
+            public void onRmsChanged(float rmsdB) {}
+
+            @Override
+            public void onBufferReceived(byte[] buffer) {}
+
+            @Override
+            public void onEndOfSpeech() {
+                Log.d(TAG, "End of speech");
+                isListening = false;
+            }
+
+            @Override
+            public void onError(int error) {
+                Log.e(TAG, "Speech error: " + error);
+                isListening = false;
+                
+                // Handle different errors
+                if (error == SpeechRecognizer.ERROR_NO_MATCH || 
+                    error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT) {
+                    // User didn't speak - restart listening
+                    if (isConversationActive && !isSpeaking) {
+                        mainHandler.postDelayed(() -> startListening(), 500);
+                    }
+                    return;
+                }
+                
+                // Other errors - retry
+                if (isConversationActive && !isSpeaking) {
+                    retryOrRecover();
+                }
+            }
+
+            @Override
+            public void onResults(Bundle results) {
+                Log.d(TAG, "Got results");
+                isListening = false;
+                
+                ArrayList<String> matches = results.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
+                if (matches != null && !matches.isEmpty()) {
+                    String text = matches.get(0);
+                    Log.d(TAG, "Recognized: " + text);
+                    handleUserInput(text);
+                } else {
+                    // No results - restart listening
+                    if (isConversationActive && !isSpeaking) {
+                        mainHandler.postDelayed(() -> startListening(), 300);
+                    }
+                }
+            }
+
+            @Override
+            public void onPartialResults(Bundle bundle) {}
+
+            @Override
+            public void onEvent(int i, Bundle bundle) {}
+        });
+        
+        isRecognitionReady = true;
+        Log.d(TAG, "Speech recognition initialized");
     }
 
     private void initTextToSpeech() {
-        try {
-            textToSpeech = new TextToSpeech(this, status -> {
-                if (status == TextToSpeech.SUCCESS) {
-                    textToSpeech.setLanguage(Locale.US);
-                    textToSpeech.setOnUtteranceProgressListener(new SafeUtteranceListener());
-                    Log.d(TAG, "TTS initialized successfully");
-                } else {
-                    Log.e(TAG, "TTS init failed with status: " + status);
-                    showError("Failed to initialize text-to-speech");
-                }
-            });
-        } catch (Exception e) {
-            Log.e(TAG, "Error initializing TTS: " + e.getMessage());
-        }
+        textToSpeech = new TextToSpeech(this, status -> {
+            if (status == TextToSpeech.SUCCESS) {
+                isTTSReady = true;
+                textToSpeech.setLanguage(Locale.US);
+                textToSpeech.setSpeechRate(1.0f);
+                textToSpeech.setPitch(1.0f);
+                
+                textToSpeech.setOnUtteranceProgressListener(new UtteranceProgressListener() {
+                    @Override
+                    public void onStart(String utteranceId) {
+                        Log.d(TAG, "TTS started");
+                        isSpeaking = true;
+                        mainHandler.post(() -> updateUIState("speaking"));
+                    }
+
+                    @Override
+                    public void onDone(String utteranceId) {
+                        Log.d(TAG, "TTS done");
+                        isSpeaking = false;
+                        mainHandler.post(() -> {
+                            updateUIState("idle");
+                            // Restart listening after speaking
+                            if (isConversationActive) {
+                                mainHandler.postDelayed(() -> startListening(), 800);
+                            }
+                        });
+                    }
+
+                    @Override
+                    public void onError(String utteranceId) {
+                        Log.e(TAG, "TTS error");
+                        isSpeaking = false;
+                        mainHandler.post(() -> {
+                            updateUIState("idle");
+                            if (isConversationActive) {
+                                mainHandler.postDelayed(() -> startListening(), 500);
+                            }
+                        });
+                    }
+                });
+                
+                Log.d(TAG, "TTS initialized successfully");
+                mainHandler.post(() -> {
+                    Toast.makeText(MainActivity.this, "TTS Ready!", Toast.LENGTH_SHORT).show();
+                });
+            } else {
+                Log.e(TAG, "TTS init failed: " + status);
+                isTTSReady = false;
+            }
+        });
     }
 
     private void checkPermissions() {
-        String[] requiredPermissions = {
-            Manifest.permission.RECORD_AUDIO
-        };
-        
-        ArrayList<String> permissionsToRequest = new ArrayList<>();
-        
-        for (String permission : requiredPermissions) {
-            if (ContextCompat.checkSelfPermission(this, permission) != PackageManager.PERMISSION_GRANTED) {
-                permissionsToRequest.add(permission);
-            }
-        }
-        
-        if (!permissionsToRequest.isEmpty()) {
-            ActivityCompat.requestPermissions(
-                this, 
-                permissionsToRequest.toArray(new String[0]), 
-                PERMISSION_CODE
-            );
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) 
+                != PackageManager.PERMISSION_GRANTED) {
+            ActivityCompat.requestPermissions(this, 
+                new String[]{Manifest.permission.RECORD_AUDIO}, 
+                PERMISSION_CODE);
         }
     }
 
@@ -189,24 +268,16 @@ public class MainActivity extends AppCompatActivity {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
         
         if (requestCode == PERMISSION_CODE) {
-            boolean allGranted = true;
-            for (int result : grantResults) {
-                if (result != PackageManager.PERMISSION_GRANTED) {
-                    allGranted = false;
-                    break;
-                }
-            }
-            
-            if (allGranted) {
-                Toast.makeText(this, "✅ Permissions granted!", Toast.LENGTH_SHORT).show();
+            if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+                Toast.makeText(this, "✅ Microphone permission granted!", Toast.LENGTH_SHORT).show();
             } else {
-                showError("Microphone permission is required!");
+                Toast.makeText(this, "❌ Microphone permission required!", Toast.LENGTH_LONG).show();
                 btnToggle.setEnabled(false);
             }
         }
     }
 
-    private synchronized void toggleConversation() {
+    private void toggleConversation() {
         if (isConversationActive) {
             stopConversation();
         } else {
@@ -214,137 +285,114 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
-    private synchronized void startConversation() {
+    private void startConversation() {
         if (isConversationActive) return;
         
-        try {
-            isConversationActive = true;
-            retryCount = 0;
-            
-            updateState(ConversationState.PROCESSING);
-            updateUIState("starting");
-            
-            // Request audio focus
-            requestAudioFocus();
-            
-            // Initial greeting
-            speakWithCallback("Hello! I'm ready. What would you like to talk about?", () -> {
-                if (!isDestroyed && isConversationActive) {
-                    startListening();
-                }
-            });
-            
-        } catch (Exception e) {
-            Log.e(TAG, "Error starting conversation: " + e.getMessage());
-            handleError("Failed to start conversation");
+        // Check if components are ready
+        if (!isTTSReady || !isRecognitionReady) {
+            Toast.makeText(this, "Please wait... initializing", Toast.LENGTH_SHORT).show();
+            Log.e(TAG, "Components not ready - TTS: " + isTTSReady + ", Recognition: " + isRecognitionReady);
+            return;
         }
+        
+        isConversationActive = true;
+        retryCount = 0;
+        
+        // Request audio focus
+        requestAudioFocus();
+        
+        // Update UI
+        updateUIState("starting");
+        btnToggle.setText("🛑 STOP");
+        
+        // Start with greeting
+        speak("Hello! I'm your voice assistant. What would you like to talk about?");
+        
+        // Start listening after a short delay to let TTS start
+        mainHandler.postDelayed(() -> {
+            if (isConversationActive && !isSpeaking) {
+                startListening();
+            }
+        }, 1500);
     }
 
-    private synchronized void stopConversation() {
+    private void stopConversation() {
         if (!isConversationActive) return;
         
-        try {
-            isConversationActive = false;
-            
-            // Stop listening
-            if (speechRecognizer != null) {
-                try {
-                    speechRecognizer.stopListening();
-                } catch (Exception e) {
-                    Log.e(TAG, "Error stopping recognizer: " + e.getMessage());
-                }
+        isConversationActive = false;
+        
+        // Stop listening
+        if (speechRecognizer != null) {
+            try {
+                speechRecognizer.stopListening();
+            } catch (Exception e) {
+                Log.e(TAG, "Error stopping recognizer: " + e.getMessage());
             }
-            
-            // Stop speaking
-            if (textToSpeech != null) {
-                textToSpeech.stop();
-            }
-            
-            // Abandon audio focus
-            abandonAudioFocus();
-            
-            // Reset state
-            isListening = false;
-            isSpeaking = false;
-            updateState(ConversationState.IDLE);
-            
-            // Update UI on main thread
-            mainHandler.post(() -> {
-                try {
-                    if (btnToggle != null) {
-                        btnToggle.setText("▶️ START");
-                        btnToggle.setEnabled(true);
-                    }
-                    if (tvStatus != null) {
-                        tvStatus.setText("Stopped");
-                    }
-                    if (tvUser != null) {
-                        tvUser.setText("You: ...");
-                    }
-                    if (tvAI != null) {
-                        tvAI.setText("AI: ...");
-                    }
-                    stopAnimations();
-                } catch (Exception e) {
-                    Log.e(TAG, "Error updating UI: " + e.getMessage());
-                }
-            });
-            
-            Log.d(TAG, "Conversation stopped");
-            
-        } catch (Exception e) {
-            Log.e(TAG, "Error stopping conversation: " + e.getMessage());
         }
+        
+        // Stop speaking
+        if (textToSpeech != null) {
+            textToSpeech.stop();
+        }
+        
+        // Abandon audio focus
+        try {
+            audioManager.abandonAudioFocus(null);
+            audioManager.setMode(AudioManager.MODE_NORMAL);
+        } catch (Exception e) {
+            Log.e(TAG, "Error abandoning audio focus: " + e.getMessage());
+        }
+        
+        isListening = false;
+        isSpeaking = false;
+        
+        // Update UI
+        mainHandler.post(() -> {
+            btnToggle.setText("▶️ START");
+            tvStatus.setText("Tap Start to begin");
+            tvUser.setText("You: ...");
+            tvAI.setText("AI: ...");
+            updateUIState("idle");
+            stopAnimations();
+        });
     }
 
-    private synchronized void startListening() {
+    private void startListening() {
         if (isDestroyed || !isConversationActive || isSpeaking) {
+            Log.d(TAG, "Cannot start listening - destroyed: " + isDestroyed + 
+                  ", active: " + isConversationActive + ", speaking: " + isSpeaking);
+            return;
+        }
+        
+        if (speechRecognizer == null) {
+            Log.e(TAG, "Speech recognizer is null!");
             return;
         }
         
         try {
-            // Check if we can start listening
-            if (currentState == ConversationState.SPEAKING) {
-                Log.d(TAG, "Cannot start listening - currently speaking");
-                return;
-            }
-            
             Intent intent = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
             intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
             intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, "en-US");
             intent.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true);
             intent.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1);
-            intent.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, 1000L);
-            intent.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 2000L);
             
             isListening = true;
-            updateState(ConversationState.LISTENING);
-            startListeningAnimation();
+            updateUIState("listening");
             
             speechRecognizer.startListening(intent);
             Log.d(TAG, "Started listening");
             
         } catch (Exception e) {
             Log.e(TAG, "Error starting listening: " + e.getMessage());
-            handleError("Failed to start listening");
             retryOrRecover();
         }
     }
 
-    private synchronized void stopListening() {
-        try {
-            if (speechRecognizer != null && isListening) {
-                speechRecognizer.stopListening();
-            }
-            isListening = false;
-            stopAnimations();
-        } catch (Exception e) {
-            Log.e(TAG, "Error stopping listening: " + e.getMessage());
-        }
-    }
-
     private void handleUserInput(String text) {
-        if (text == null || text.trim().isEmpty()) return;
+        if (text == null || text.trim().isEmpty()) {
+            startListening();
+            return;
+        }
         
         // Check for stop command
         if (text.toLowerCase().contains("stop")) {
@@ -352,51 +400,32 @@ public class MainActivity extends AppCompatActivity {
             return;
         }
         
-        // Update UI
-        mainHandler.post(() -> {
-            try {
-                if (tvUser != null) {
-                    tvUser.setText("You: " + text);
-                }
-            } catch (Exception e) {
-                Log.e(TAG, "Error updating user text: " + e.getMessage());
-            }
-        });
+        // Update UI with user text
+        mainHandler.post(() -> tvUser.setText("You: " + text));
         
         // Process with AI
         processWithAI(text);
     }
 
     private void processWithAI(String input) {
-        updateState(ConversationState.PROCESSING);
+        updateUIState("thinking");
         
         executor.execute(() -> {
             try {
                 String response = getGroqResponse(input);
                 
                 mainHandler.post(() -> {
-                    if (isDestroyed) return;
-                    
-                    try {
-                        if (tvAI != null) {
-                            tvAI.setText("AI: " + response);
-                        }
-                        
-                        speakWithCallback(response, () -> {
-                            if (!isDestroyed && isConversationActive) {
-                                // Restart listening after speaking
-                                mainHandler.postDelayed(() -> startListening(), 800);
-                            }
-                        });
-                    } catch (Exception e) {
-                        Log.e(TAG, "Error processing AI response: " + e.getMessage());
-                        handleError("Failed to process response");
-                    }
+                    tvAI.setText("AI: " + response);
+                    speak(response);
                 });
                 
             } catch (Exception e) {
-                Log.e(TAG, "Error getting AI response: " + e.getMessage());
-                mainHandler.post(() -> handleError("Network error: " + e.getMessage()));
+                Log.e(TAG, "AI error: " + e.getMessage());
+                mainHandler.post(() -> {
+                    tvAI.setText("AI: Sorry, I couldn't process that.");
+                    speak("Sorry, I encountered an error. Let's try again.");
+                    mainHandler.postDelayed(() -> startListening(), 2000);
+                });
             }
         });
     }
@@ -414,7 +443,7 @@ public class MainActivity extends AppCompatActivity {
             conn.setDoOutput(true);
             
             String jsonBody = "{\"model\":\"llama-3.1-8b-instant\"," +
-                    "\"messages\":[{\"role\":\"system\",\"content\":\"You are a friendly, helpful phone assistant. Keep responses conversational and under 2 sentences.\"}," +
+                    "\"messages\":[{\"role\":\"system\",\"content\":\"You are a friendly phone assistant. Keep responses short, conversational, and helpful.\"}," +
                     "{\"role\":\"user\",\"content\":\"" + input.replace("\"", "\\\"") + "\"}]," +
                     "\"temperature\":0.7,\"max_tokens\":100}";
             
@@ -442,349 +471,196 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
-    private void speakWithCallback(String text, Runnable onComplete) {
-        if (isDestroyed || textToSpeech == null) return;
+    private void speak(String text) {
+        if (textToSpeech == null || !isTTSReady) {
+            Log.e(TAG, "TTS not ready!");
+            // Try to restart listening anyway
+            if (isConversationActive) {
+                mainHandler.postDelayed(() -> startListening(), 500);
+            }
+            return;
+        }
         
         try {
             isSpeaking = true;
-            updateState(ConversationState.SPEAKING);
-            startSpeakingAnimation();
-            
-            Bundle params = new Bundle();
-            params.putString("callback", "complete");
+            updateUIState("speaking");
             
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                textToSpeech.speak(text, TextToSpeech.QUEUE_FLUSH, params, "utterance_" + System.currentTimeMillis());
+                textToSpeech.speak(text, TextToSpeech.QUEUE_FLUSH, null, "utterance");
             } else {
                 textToSpeech.speak(text, TextToSpeech.QUEUE_FLUSH, null);
             }
         } catch (Exception e) {
-            Log.e(TAG, "Error speaking: " + e.getMessage());
+            Log.e(TAG, "TTS speak error: " + e.getMessage());
             isSpeaking = false;
-            if (onComplete != null) {
-                onComplete.run();
-            }
-        }
-    }
-
-    private void onSpeechComplete() {
-        isSpeaking = false;
-        stopSpeakingAnimation();
-        
-        if (isConversationActive) {
-            // Auto-restart listening after a short delay
-            mainHandler.postDelayed(() -> {
-                if (!isDestroyed && isConversationActive && !isSpeaking) {
-                    startListening();
-                }
-            }, 500);
+            updateUIState("idle");
         }
     }
 
     private void requestAudioFocus() {
         try {
-            if (audioManager != null) {
-                audioManager.setMode(AudioManager.MODE_IN_COMMUNICATION);
-                int result = audioManager.requestAudioFocus(null, 
-                    AudioManager.STREAM_VOICE_CALL, 
-                    AudioManager.AUDIOFOCUS_GAIN_TRANSIENT);
-                
-                Log.d(TAG, "Audio focus request result: " + result);
-            }
+            audioManager.setMode(AudioManager.MODE_IN_COMMUNICATION);
+            audioManager.requestAudioFocus(null, 
+                AudioManager.STREAM_VOICE_CALL, 
+                AudioManager.AUDIOFOCUS_GAIN_TRANSIENT);
         } catch (Exception e) {
-            Log.e(TAG, "Error requesting audio focus: " + e.getMessage());
+            Log.e(TAG, "Audio focus error: " + e.getMessage());
         }
-    }
-
-    private void abandonAudioFocus() {
-        try {
-            if (audioManager != null) {
-                audioManager.abandonAudioFocus(null);
-                audioManager.setMode(AudioManager.MODE_NORMAL);
-            }
-        } catch (Exception e) {
-            Log.e(TAG, "Error abandoning audio focus: " + e.getMessage());
-        }
-    }
-
-    private void updateState(ConversationState newState) {
-        currentState = newState;
-        Log.d(TAG, "State changed to: " + newState);
-    }
-
-    private void updateUIState(String state) {
-        mainHandler.post(() -> {
-            try {
-                if (isDestroyed) return;
-                
-                int bgColor;
-                String icon;
-                String statusText;
-                
-                switch (state) {
-                    case "listening":
-                        bgColor = 0xFF4CAF50;
-                        icon = "🎤";
-                        statusText = "Listening...";
-                        break;
-                    case "speaking":
-                        bgColor = 0xFF2196F3;
-                        icon = "🔊";
-                        statusText = "Speaking...";
-                        break;
-                    case "thinking":
-                        bgColor = 0xFFFF9800;
-                        icon = "🧠";
-                        statusText = "Thinking...";
-                        break;
-                    case "starting":
-                        bgColor = 0xFF9C27B0;
-                        icon = "⚡";
-                        statusText = "Starting...";
-                        break;
-                    default:
-                        bgColor = 0xFF333333;
-                        icon = "🎤";
-                        statusText = "Ready";
-                }
-                
-                if (circleView != null) {
-                    circleView.setBackgroundColor(bgColor);
-                }
-                if (tvIcon != null) {
-                    tvIcon.setText(icon);
-                }
-                if (tvStatus != null) {
-                    tvStatus.setText(statusText);
-                }
-                if (btnToggle != null) {
-                    btnToggle.setText("🛑 STOP");
-                }
-                
-            } catch (Exception e) {
-                Log.e(TAG, "Error updating UI: " + e.getMessage());
-            }
-        });
-    }
-
-    private void startListeningAnimation() {
-        mainHandler.post(() -> {
-            try {
-                if (circleView == null) return;
-                
-                // Pulse animation
-                Animation pulseAnim = new ScaleAnimation(
-                    1.0f, 1.15f, 1.0f, 1.15f,
-                    Animation.RELATIVE_TO_SELF, 0.5f,
-                    Animation.RELATIVE_TO_SELF, 0.5f
-                );
-                pulseAnim.setDuration(600);
-                pulseAnim.setRepeatCount(Animation.INFINITE);
-                pulseAnim.setRepeatMode(Animation.REVERSE);
-                circleView.startAnimation(pulseAnim);
-                
-                updateUIState("listening");
-                
-            } catch (Exception e) {
-                Log.e(TAG, "Error starting listening animation: " + e.getMessage());
-            }
-        });
-    }
-
-    private void startSpeakingAnimation() {
-        mainHandler.post(() -> {
-            try {
-                if (circleView == null) return;
-                
-                // Fade animation
-                Animation fadeAnim = new AlphaAnimation(1.0f, 0.6f);
-                fadeAnim.setDuration(400);
-                fadeAnim.setRepeatCount(Animation.INFINITE);
-                fadeAnim.setRepeatMode(Animation.REVERSE);
-                circleView.startAnimation(fadeAnim);
-                
-                updateUIState("speaking");
-                
-            } catch (Exception e) {
-                Log.e(TAG, "Error starting speaking animation: " + e.getMessage());
-            }
-        });
-    }
-
-    private void stopAnimations() {
-        mainHandler.post(() -> {
-            try {
-                if (circleView != null) {
-                    circleView.clearAnimation();
-                }
-            } catch (Exception e) {
-                Log.e(TAG, "Error stopping animations: " + e.getMessage());
-            }
-        });
-    }
-
-    private void stopSpeakingAnimation() {
-        stopAnimations();
     }
 
     private void retryOrRecover() {
         retryCount++;
+        Log.d(TAG, "Retry attempt: " + retryCount);
+        
         if (retryCount < MAX_RETRIES && isConversationActive) {
-            Log.d(TAG, "Retrying... attempt " + retryCount);
             mainHandler.postDelayed(() -> startListening(), 1000);
         } else {
-            handleError("Connection lost. Tap to retry.");
             retryCount = 0;
+            mainHandler.post(() -> {
+                tvStatus.setText("Tap to retry");
+                Toast.makeText(this, "Connection issue. Tap Start to try again.", Toast.LENGTH_LONG).show();
+            });
         }
     }
 
-    private void handleError(String message) {
-        Log.e(TAG, "Error: " + message);
-        
-        mainHandler.post(() -> {
-            try {
-                if (tvStatus != null) {
-                    tvStatus.setText(message);
-                }
-                
-                // Show error but don't crash
-                if (isConversationActive) {
-                    speakWithCallback("Sorry, I encountered an error. Let's try again.", () -> {
-                        mainHandler.postDelayed(() -> startListening(), 1000);
-                    });
-                }
-            } catch (Exception e) {
-                Log.e(TAG, "Error in error handler: " + e.getMessage());
-            }
-        });
-    }
-
-    private void showError(String message) {
-        mainHandler.post(() -> {
-            try {
-                Toast.makeText(this, message, Toast.LENGTH_LONG).show();
-            } catch (Exception e) {
-                Log.e(TAG, "Error showing toast: " + e.getMessage());
-            }
-        });
-    }
-
-    // Safe Recognition Listener
-    private class SafeRecognitionListener implements RecognitionListener {
-        
-        @Override
-        public void onReadyForSpeech(Bundle params) {
-            Log.d(TAG, "Ready for speech");
-        }
-
-        @Override
-        public void onBeginningOfSpeech() {}
-
-        @Override
-        public void onRmsChanged(float rmsdB) {}
-
-        @Override
-        public void onBufferReceived(byte[] buffer) {}
-
-        @Override
-        public void onEndOfSpeech() {
-            Log.d(TAG, "End of speech");
-            isListening = false;
-        }
-
-        @Override
-        public void onError(int error) {
-            Log.e(TAG, "Speech recognition error: " + error);
-            isListening = false;
+    private void updateUIState(String state) {
+        try {
+            int bgColor;
+            String icon;
+            String statusText;
             
-            // Don't restart on no speech error
-            if (error == SpeechRecognizer.ERROR_NO_MATCH || 
-                error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT) {
-                // Silent - user just didn't speak
-                if (isConversationActive && !isSpeaking) {
-                    mainHandler.postDelayed(() -> startListening(), 500);
-                }
-                return;
+            switch (state) {
+                case "listening":
+                    bgColor = 0xFF4CAF50; // Green
+                    icon = "🎤";
+                    statusText = "Listening...";
+                    startListeningAnimation();
+                    break;
+                case "speaking":
+                    bgColor = 0xFF2196F3; // Blue
+                    icon = "🔊";
+                    statusText = "Speaking...";
+                    startSpeakingAnimation();
+                    break;
+                case "thinking":
+                    bgColor = 0xFFFF9800; // Orange
+                    icon = "🧠";
+                    statusText = "Thinking...";
+                    startThinkingAnimation();
+                    break;
+                case "starting":
+                    bgColor = 0xFF9C27B0; // Purple
+                    icon = "⚡";
+                    statusText = "Starting...";
+                    break;
+                case "idle":
+                default:
+                    bgColor = 0xFF333333; // Dark gray
+                    icon = "🎤";
+                    statusText = "Tap Start to begin";
+                    stopAnimations();
             }
             
-            // For other errors, try to recover
-            if (isConversationActive && !isSpeaking) {
-                retryOrRecover();
+            if (circleView != null) {
+                circleView.setBackgroundColor(bgColor);
             }
-        }
-
-        @Override
-        public void onResults(Bundle results) {
-            Log.d(TAG, "Speech results received");
-            isListening = false;
+            if (tvIcon != null) {
+                tvIcon.setText(icon);
+            }
+            if (tvStatus != null) {
+                tvStatus.setText(statusText);
+            }
             
-            try {
-                ArrayList<String> matches = results.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
-                if (matches != null && !matches.isEmpty()) {
-                    String text = matches.get(0);
-                    Log.d(TAG, "Recognized: " + text);
-                    handleUserInput(text);
-                }
-            } catch (Exception e) {
-                Log.e(TAG, "Error processing results: " + e.getMessage());
-            }
-        }
-
-        @Override
-        public void onPartialResults(Bundle partialResults) {}
-
-        @Override
-        public void onEvent(int eventType, Bundle params) {}
-    }
-
-    // Safe Utterance Listener
-    private class SafeUtteranceListener extends UtteranceProgressListener {
-        
-        @Override
-        public void onStart(String utteranceId) {
-            Log.d(TAG, "TTS started");
-            isSpeaking = true;
-        }
-
-        @Override
-        public void onDone(String utteranceId) {
-            Log.d(TAG, "TTS done");
-            isSpeaking = false;
-            onSpeechComplete();
-        }
-
-        @Override
-        public void onError(String utteranceId) {
-            Log.e(TAG, "TTS error");
-            isSpeaking = false;
-            onSpeechComplete();
+        } catch (Exception e) {
+            Log.e(TAG, "UI update error: " + e.getMessage());
         }
     }
 
-    // Handle incoming calls
-    public void onIncomingCall(String number) {
-        if (isConversationActive) return;
-        
-        mainHandler.post(() -> {
-            try {
-                new AlertDialog.Builder(MainActivity.this)
-                    .setTitle("📞 Incoming Call")
-                    .setMessage("From: " + number + "\n\nTransfer to AI assistant?")
-                    .setPositiveButton("✅ Transfer to AI", (d, w) -> startConversation())
-                    .setNegativeButton("❌ Decline", (d, w) -> {})
-                    .setCancelable(false)
-                    .show();
-            } catch (Exception e) {
-                Log.e(TAG, "Error showing call dialog: " + e.getMessage());
+    private void startListeningAnimation() {
+        try {
+            if (circleView == null) return;
+            
+            Animation scaleAnim = new ScaleAnimation(
+                1.0f, 1.1f, 1.0f, 1.1f,
+                Animation.RELATIVE_TO_SELF, 0.5f,
+                Animation.RELATIVE_TO_SELF, 0.5f
+            );
+            scaleAnim.setDuration(600);
+            scaleAnim.setRepeatCount(Animation.INFINITE);
+            scaleAnim.setRepeatMode(Animation.REVERSE);
+            circleView.startAnimation(scaleAnim);
+            
+            // Pulse effect
+            if (pulseView != null) {
+                Animation pulseAnim = new ScaleAnimation(
+                    1.0f, 1.3f, 1.0f, 1.3f,
+                    Animation.RELATIVE_TO_SELF, 0.5f,
+                    Animation.RELATIVE_TO_SELF, 0.5f
+                );
+                pulseAnim.setDuration(800);
+                pulseAnim.setRepeatCount(Animation.INFINITE);
+                pulseAnim.setRepeatMode(Animation.REVERSE);
+                pulseView.startAnimation(pulseAnim);
+                pulseView.setAlpha(0.5f);
             }
-        });
+            
+        } catch (Exception e) {
+            Log.e(TAG, "Listening animation error: " + e.getMessage());
+        }
+    }
+
+    private void startSpeakingAnimation() {
+        try {
+            if (circleView == null) return;
+            
+            Animation fadeAnim = new AlphaAnimation(1.0f, 0.5f);
+            fadeAnim.setDuration(400);
+            fadeAnim.setRepeatCount(Animation.INFINITE);
+            fadeAnim.setRepeatMode(Animation.REVERSE);
+            circleView.startAnimation(fadeAnim);
+            
+        } catch (Exception e) {
+            Log.e(TAG, "Speaking animation error: " + e.getMessage());
+        }
+    }
+
+    private void startThinkingAnimation() {
+        try {
+            if (circleView == null) return;
+            
+            Animation rotateAnim = new ScaleAnimation(
+                1.0f, 1.05f, 1.0f, 1.05f,
+                Animation.RELATIVE_TO_SELF, 0.5f,
+                Animation.RELATIVE_TO_SELF, 0.5f
+            );
+            rotateAnim.setDuration(300);
+            rotateAnim.setRepeatCount(Animation.INFINITE);
+            rotateAnim.setRepeatMode(Animation.REVERSE);
+            circleView.startAnimation(rotateAnim);
+            
+        } catch (Exception e) {
+            Log.e(TAG, "Thinking animation error: " + e.getMessage());
+        }
+    }
+
+    private void stopAnimations() {
+        try {
+            if (circleView != null) {
+                circleView.clearAnimation();
+            }
+            if (pulseView != null) {
+                pulseView.clearAnimation();
+                pulseView.setAlpha(0f);
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "Stop animation error: " + e.getMessage());
+        }
     }
 
     @Override
     protected void onPause() {
         super.onPause();
         Log.d(TAG, "App paused");
-        // Optionally pause conversation
     }
 
     @Override
@@ -813,17 +689,11 @@ public class MainActivity extends AppCompatActivity {
             
             if (executor != null) {
                 executor.shutdown();
-                try {
-                    executor.awaitTermination(1, TimeUnit.SECONDS);
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                }
+                executor.awaitTermination(1, TimeUnit.SECONDS);
             }
             
-            abandonAudioFocus();
-            
         } catch (Exception e) {
-            Log.e(TAG, "Error in onDestroy: " + e.getMessage());
+            Log.e(TAG, "Destroy error: " + e.getMessage());
         }
         
         super.onDestroy();
