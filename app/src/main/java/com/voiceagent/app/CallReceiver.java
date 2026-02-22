@@ -18,7 +18,7 @@ public class CallReceiver extends BroadcastReceiver {
     public void onReceive(Context context, Intent intent) {
         if (intent == null) return;
 
-        String state = intent.getStringExtra(TelephonyManager.EXTRA_CALL_STATE);
+        String state = intent.getStringExtra(TelephonyManager.EXTRA_STATE);
         
         if (TelephonyManager.EXTRA_STATE_RINGING.equals(state)) {
             String number = intent.getStringExtra(TelephonyManager.EXTRA_INCOMING_NUMBER);
