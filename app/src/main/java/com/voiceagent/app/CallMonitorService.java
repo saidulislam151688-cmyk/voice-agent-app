@@ -5,6 +5,7 @@ import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.app.Service;
+import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
@@ -36,6 +37,7 @@ public class CallMonitorService extends Service {
     public static String ACTION_STOP = "com.voiceagent.app.STOP";
     
     public static CallListener listener;
+    public static CallAnswerListener answerListener;
     
     private TelephonyManager telephonyManager;
     private AudioManager audioManager;
@@ -50,6 +52,330 @@ public class CallMonitorService extends Service {
         void onCallEnded();
         void onCallDisconnected();
     }
+    
+    public interface CallAnswerListener {
+        void onAnswerRequested(String number);
+    }
+    
+    @Override
+    public void onCreate() {
+        super.onCreate();
+        Log.d(TAG, "Service created");
+        
+        audioManager = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
+        createNotificationChannel();
+        
+        registerAnswerReceiver();
+    }
+    
+    private void registerAnswerReceiver() {
+        IntentFilter filter = new IntentFilter(ACTION_ANSWER);
+        registerReceiver(answerReceiver, filter);
+    }
+    
+    private final BroadcastReceiver answerReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            if (ACTION_ANSWER.equals(intent.getAction())) {
+                String number = intent.getStringExtra("phone_number");
+                Log.d(TAG, "Received answer action for: " + number);
+                answerCall();
+            }
+        }
+    };
+    
+    @Override
+    public int onStartCommand(Intent intent, int flags, int startId) {
+        Log.d(TAG, "onStartCommand called");
+        
+        if (intent != null) {
+            String action = intent.getAction();
+            Log.d(TAG, "Action: " + action);
+            
+            if (ACTION_STOP.equals(action)) {
+                stopSelf();
+                return START_NOT_STICKY;
+            }
+            
+            if (ACTION_ANSWER.equals(action)) {
+                String number = intent.getStringExtra("phone_number");
+                answerCall();
+            }
+        }
+        
+        startForeground(FOREGROUND_NOTIFICATION_ID, createForegroundNotification());
+        startCallMonitoring();
+        
+        return START_STICKY;
+    }
+    
+    private void startCallMonitoring() {
+        if (isListeningForCalls) {
+            Log.d(TAG, "Already listening for calls");
+            return;
+        }
+        
+        try {
+            if (ContextCompat.checkSelfPermission(this, android.Manifest.permission.READ_PHONE_STATE) 
+                    != PackageManager.PERMISSION_GRANTED) {
+                Log.e(TAG, "READ_PHONE_STATE permission not granted");
+                return;
+            }
+            
+            telephonyManager = (TelephonyManager) getSystemService(Context.TELEPHONY_SERVICE);
+            
+            if (telephonyManager != null) {
+                phoneStateListener = new PhoneStateListener() {
+                    @Override
+                    public void onCallStateChanged(int state, String phoneNumber) {
+                        super.onCallStateChanged(state, phoneNumber);
+                        Log.d(TAG, "Call state: " + state + ", number: " + phoneNumber);
+                        
+                        switch (state) {
+                            case TelephonyManager.CALL_STATE_RINGING:
+                                Log.d(TAG, "=== CALL RINGING ===");
+                                currentCallNumber = phoneNumber != null ? phoneNumber : "Unknown";
+                                showIncomingCallNotification(currentCallNumber);
+                                if (listener != null) {
+                                    listener.onCallRinging(currentCallNumber);
+                                }
+                                break;
+                                
+                            case TelephonyManager.CALL_STATE_OFFHOOK:
+                                Log.d(TAG, "=== CALL OFFHOOK (ANSWERED) ===");
+                                if (listener != null) {
+                                    listener.onCallAnswered();
+                                }
+                                break;
+                                
+                            case TelephonyManager.CALL_STATE_IDLE:
+                                Log.d(TAG, "=== CALL IDLE ===");
+                                dismissCallNotification();
+                                currentCallNumber = null;
+                                if (listener != null) {
+                                    listener.onCallEnded();
+                                }
+                                break;
+                        }
+                    }
+                };
+                
+                telephonyManager.listen(phoneStateListener, PhoneStateListener.LISTEN_CALL_STATE);
+                isListeningForCalls = true;
+                Log.d(TAG, "Started listening for calls");
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "Error starting call monitoring: " + e.getMessage());
+            e.printStackTrace();
+        }
+    }
+    
+    private void createNotificationChannel() {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                NotificationChannel channel = new NotificationChannel(
+                    CHANNEL_ID,
+                    "Voice Agent Calls",
+                    NotificationManager.IMPORTANCE_HIGH
+                );
+                channel.setDescription("Incoming call notifications");
+                channel.enableVibration(true);
+                channel.setVibrationPattern(new long[]{0, 500, 200, 500});
+                channel.setShowBadge(true);
+                channel.setLockscreenVisibility(Notification.VISIBILITY_PUBLIC);
+                
+                NotificationManager manager = getSystemService(NotificationManager.class);
+                if (manager != null) {
+                    manager.createNotificationChannel(channel);
+                }
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "Error creating notification channel: " + e.getMessage());
+        }
+    }
+    
+    private Notification createForegroundNotification() {
+        Intent mainIntent = new Intent(this, MainActivity.class);
+        mainIntent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+        PendingIntent mainPendingIntent = PendingIntent.getActivity(
+            this, 0, mainIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
+        );
+        
+        return new NotificationCompat.Builder(this, CHANNEL_ID)
+            .setSmallIcon(R.drawable.ic_mic_white)
+            .setContentTitle("Voice Agent")
+            .setContentText("Monitoring calls...")
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setOngoing(true)
+            .setContentIntent(mainPendingIntent)
+            .build();
+    }
+    
+    private void showIncomingCallNotification(String phoneNumber) {
+        Log.d(TAG, "Showing incoming call notification for: " + phoneNumber);
+        
+        Intent mainIntent = new Intent(this, MainActivity.class);
+        mainIntent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+        PendingIntent mainPendingIntent = PendingIntent.getActivity(
+            this, 0, mainIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
+        );
+        
+        Intent answerIntent = new Intent(this, CallMonitorService.class);
+        answerIntent.setAction(ACTION_ANSWER);
+        answerIntent.putExtra("phone_number", phoneNumber);
+        PendingIntent answerPendingIntent = PendingIntent.getService(
+            this, 1, answerIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
+        );
+        
+        Intent dismissIntent = new Intent(this, MainActivity.class);
+        dismissIntent.setAction(ACTION_REJECT);
+        dismissIntent.putExtra("phone_number", phoneNumber);
+        PendingIntent dismissPendingIntent = PendingIntent.getActivity(
+            this, 2, dismissIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
+        );
+        
+        NotificationCompat.Builder builder = new NotificationCompat.Builder(this, CHANNEL_ID)
+            .setSmallIcon(R.drawable.ic_mic_white)
+            .setContentTitle("Incoming Call")
+            .setContentText("From: " + phoneNumber)
+            .setStyle(new NotificationCompat.BigTextStyle().bigText("From: " + phoneNumber + "\nTap CONFIRM to transfer to AI"))
+            .setPriority(NotificationCompat.PRIORITY_MAX)
+            .setCategory(NotificationCompat.CATEGORY_CALL)
+            .setAutoCancel(true)
+            .setVibrate(new long[]{0, 500, 200, 500})
+            .setContentIntent(mainPendingIntent)
+            .setFullScreenIntent(mainPendingIntent, true)
+            .addAction(R.drawable.ic_mic_white, "CONFIRM", answerPendingIntent)
+            .addAction(R.drawable.ic_mic_white, "DISMISS", dismissPendingIntent);
+        
+        NotificationManager manager = getSystemService(NotificationManager.class);
+        if (manager != null) {
+            manager.notify(NOTIFICATION_ID, builder.build());
+            Log.d(TAG, "Notification shown successfully");
+        } else {
+            Log.e(TAG, "NotificationManager is null");
+        }
+    }
+    
+    private void dismissCallNotification() {
+        try {
+            NotificationManager manager = getSystemService(NotificationManager.class);
+            if (manager != null) {
+                manager.cancel(NOTIFICATION_ID);
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "Error dismissing notification: " + e.getMessage());
+        }
+    }
+    
+    public void answerCall() {
+        Log.d(TAG, "Attempting to answer call...");
+        
+        if (answerListener != null) {
+            answerListener.onAnswerRequested(currentCallNumber);
+        }
+        
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                TelecomManager telecomManager = (TelecomManager) getSystemService(Context.TELECOM_SERVICE);
+                if (telecomManager != null) {
+                    if (ContextCompat.checkSelfPermission(this, android.Manifest.permission.ANSWER_PHONE_CALLS) 
+                            == PackageManager.PERMISSION_GRANTED) {
+                        telecomManager.acceptRingingCall();
+                        Log.d(TAG, "Call answered via TelecomManager");
+                        
+                        mainHandler.postDelayed(() -> {
+                            if (listener != null) {
+                                listener.onCallAnswered();
+                            }
+                        }, 500);
+                        return;
+                    }
+                }
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "TelecomManager error: " + e.getMessage());
+        }
+        
+        try {
+            Intent intent = new Intent(Intent.ACTION_ANSWER);
+            intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            startActivity(intent);
+            Log.d(TAG, "Call answered via ACTION_ANSWER");
+        } catch (Exception e) {
+            Log.e(TAG, "ACTION_ANSWER error: " + e.getMessage());
+            
+            try {
+                Runtime.getRuntime().exec("input keyevent 5");
+                Log.d(TAG, "Call answered via keyevent");
+            } catch (Exception ex) {
+                Log.e(TAG, "keyevent error: " + ex.getMessage());
+            }
+        }
+    }
+    
+    public void enableSpeakerMode() {
+        try {
+            if (audioManager == null) {
+                audioManager = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
+            }
+            
+            audioManager.setMode(AudioManager.MODE_IN_COMMUNICATION);
+            audioManager.setSpeakerphoneOn(true);
+            
+            int maxVolume = audioManager.getStreamMaxVolume(AudioManager.STREAM_VOICE_CALL);
+            audioManager.setStreamVolume(AudioManager.STREAM_VOICE_CALL, maxVolume, 0);
+            
+            audioManager.requestAudioFocus(null, AudioManager.STREAM_VOICE_CALL, 
+                AudioManager.AUDIOFOCUS_GAIN_TRANSIENT);
+            
+            Log.d(TAG, "Speaker enabled successfully");
+        } catch (Exception e) {
+            Log.e(TAG, "Speaker error: " + e.getMessage());
+        }
+    }
+    
+    public void disableSpeakerMode() {
+        try {
+            if (audioManager != null) {
+                audioManager.setSpeakerphoneOn(false);
+                audioManager.setMode(AudioManager.MODE_NORMAL);
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "Disable speaker error: " + e.getMessage());
+        }
+    }
+    
+    @Nullable
+    @Override
+    public IBinder onBind(Intent intent) {
+        return null;
+    }
+    
+    @Override
+    public void onDestroy() {
+        Log.d(TAG, "Service destroyed");
+        
+        try {
+            unregisterReceiver(answerReceiver);
+        } catch (Exception e) {}
+        
+        if (telephonyManager != null && phoneStateListener != null && isListeningForCalls) {
+            try {
+                telephonyManager.listen(phoneStateListener, PhoneStateListener.LISTEN_NONE);
+            } catch (Exception e) {
+                Log.e(TAG, "Error stopping listener: " + e.getMessage());
+            }
+            isListeningForCalls = false;
+        }
+        
+        super.onDestroy();
+    }
+}
     
     @Override
     public void onCreate() {
