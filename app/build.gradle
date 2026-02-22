@@ -5,11 +5,10 @@ plugins {
 android {
     namespace 'com.voiceagent.app'
     compileSdk 34
-    buildToolsVersion "29.0.3"
 
     defaultConfig {
         applicationId "com.voiceagent.app"
-        minSdk 24
+        minSdk 26
         targetSdk 34
         versionCode 1
         versionName "1.0"
