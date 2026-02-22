@@ -18,7 +18,8 @@ out/
 .gradle/
 build/
 local.properties
-*.gradle
+!build.gradle
+!settings.gradle
 
 # Android Studio
 .cidea/
