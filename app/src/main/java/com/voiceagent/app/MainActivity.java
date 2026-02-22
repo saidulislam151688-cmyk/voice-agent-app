@@ -1,6 +1,10 @@
 package com.voiceagent.app;
 
 import android.Manifest;
+import android.app.NotificationChannel;
+import android.app.NotificationManager;
+import android.app.PendingIntent;
+import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
@@ -14,6 +18,7 @@ import android.speech.RecognizerIntent;
 import android.speech.SpeechRecognizer;
 import android.speech.tts.TextToSpeech;
 import android.speech.tts.UtteranceProgressListener;
+import android.telephony.TelephonyManager;
 import android.util.Log;
 import android.view.View;
 import android.view.animation.Animation;
@@ -25,6 +30,7 @@ import android.widget.Toast;
 import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.app.ActivityCompat;
+import androidx.core.app.NotificationCompat;
 import androidx.core.content.ContextCompat;
 
 import com.google.android.material.floatingactionbutton.FloatingActionButton;
@@ -41,10 +47,12 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
-public class MainActivity extends AppCompatActivity {
+public class MainActivity extends AppCompatActivity implements CallReceiver.CallListener {
 
     private static final String TAG = "VoiceAgent";
     private static final int PERMISSION_CODE = 100;
+    private static final String CHANNEL_ID = "voice_agent_call_channel";
+    private static final int NOTIFICATION_ID = 1001;
     
     // API Key - will be replaced by GitHub Actions
     private static final String GROQ_API_KEY = "YOUR_GROQ_API_KEY";
@@ -77,11 +85,23 @@ public class MainActivity extends AppCompatActivity {
     private boolean isListening = false;
     private boolean isSpeaking = false;
     private boolean isDestroyed = false;
+    
+    // Call handling
+    private String incomingCallNumber = null;
+    private boolean isCallActive = false;
+    private NotificationManager notificationManager;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
+        
+        // Initialize notification manager
+        notificationManager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+        createNotificationChannel();
+        
+        // Register call receiver
+        CallReceiver.setListener(this);
         
         initViews();
         initAudioManager();
@@ -313,8 +333,19 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void checkPermissions() {
+        ArrayList<String> permissionsNeeded = new ArrayList<>();
+        
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-            ActivityCompat.requestPermissions(this, new String[]{Manifest.permission.RECORD_AUDIO}, PERMISSION_CODE);
+            permissionsNeeded.add(Manifest.permission.RECORD_AUDIO);
+        }
+        
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_PHONE_STATE) != PackageManager.PERMISSION_GRANTED) {
+            permissionsNeeded.add(Manifest.permission.READ_PHONE_STATE);
+        }
+        
+        if (!permissionsNeeded.isEmpty()) {
+            String[] permissions = permissionsNeeded.toArray(new String[0]);
+            ActivityCompat.requestPermissions(this, permissions, PERMISSION_CODE);
         }
     }
 
@@ -649,6 +680,116 @@ public class MainActivity extends AppCompatActivity {
         try {
             if (circleView != null) circleView.clearAnimation();
         } catch (Exception e) { Log.e(TAG, "Stop animation error: " + e.getMessage()); }
+    }
+    
+    // ============== Call Notification System ==============
+    
+    private void createNotificationChannel() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            NotificationChannel channel = new NotificationChannel(
+                CHANNEL_ID,
+                "Voice Agent Call",
+                NotificationManager.IMPORTANCE_HIGH
+            );
+            channel.setDescription("Notification for incoming calls");
+            channel.enableVibration(true);
+            channel.setVibrationPattern(new long[]{0, 500, 200, 500});
+            notificationManager.createNotificationChannel(channel);
+        }
+    }
+    
+    private void showCallNotification(String phoneNumber) {
+        incomingCallNumber = phoneNumber;
+        
+        // Intent for Confirm button
+        Intent confirmIntent = new Intent(this, MainActivity.class);
+        confirmIntent.setAction("ACTION_CONFIRM_TRANSFER");
+        confirmIntent.putExtra("phone_number", phoneNumber);
+        PendingIntent confirmPendingIntent = PendingIntent.getActivity(
+            this, 0, confirmIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
+        );
+        
+        // Intent for Reject button
+        Intent rejectIntent = new Intent(this, MainActivity.class);
+        rejectIntent.setAction("ACTION_REJECT_CALL");
+        PendingIntent rejectPendingIntent = PendingIntent.getActivity(
+            this, 1, rejectIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
+        );
+        
+        NotificationCompat.Builder builder = new NotificationCompat.Builder(this, CHANNEL_ID)
+            .setSmallIcon(R.drawable.ic_mic_white)
+            .setContentTitle("📞 Incoming Call")
+            .setContentText("Call from: " + phoneNumber)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setCategory(NotificationCompat.CATEGORY_CALL)
+            .setAutoCancel(true)
+            .setVibrate(new long[]{0, 500, 200, 500})
+            .setContentIntent(confirmPendingIntent)
+            .addAction(R.drawable.ic_mic_white, "✅ CONFIRM", confirmPendingIntent)
+            .addAction(R.drawable.ic_mic_white, "❌ REJECT", rejectPendingIntent);
+        
+        notificationManager.notify(NOTIFICATION_ID, builder.build());
+        Log.d(TAG, "Call notification shown for: " + phoneNumber);
+    }
+    
+    private void dismissNotification() {
+        notificationManager.cancel(NOTIFICATION_ID);
+    }
+    
+    // Called when user clicks "CONFIRM" to transfer call to agent
+    private void transferCallToAgent(String phoneNumber) {
+        Log.d(TAG, "Transferring call from: " + phoneNumber);
+        dismissNotification();
+        
+        isCallActive = true;
+        isConversationActive = true;
+        detectedLanguage = "en";
+        
+        // Bring app to foreground
+        Intent intent = new Intent(this, MainActivity.class);
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+        startActivity(intent);
+        
+        // Request audio focus and start conversation
+        requestAudioFocus();
+        updateUIState("starting");
+        
+        // Greet the caller through AI
+        String greeting = "Hello! This is an AI assistant. How can I help you today?";
+        speak(greeting);
+        
+        mainHandler.postDelayed(() -> {
+            if (isCallActive && !isSpeaking) {
+                startListening();
+            }
+        }, 2000);
+        
+        Toast.makeText(this, "Call transferred to AI Agent", Toast.LENGTH_LONG).show();
+    }
+    
+    // CallReceiver.CallListener implementation
+    @Override
+    public void onIncomingCall(String number) {
+        Log.d(TAG, "Incoming call from: " + number);
+        mainHandler.post(() -> {
+            showCallNotification(number);
+        });
+    }
+    
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        if (intent != null && intent.getAction() != null) {
+            String phoneNumber = intent.getStringExtra("phone_number");
+            
+            if ("ACTION_CONFIRM_TRANSFER".equals(intent.getAction())) {
+                transferCallToAgent(phoneNumber);
+            } else if ("ACTION_REJECT_CALL".equals(intent.getAction())) {
+                dismissNotification();
+            }
+        }
     }
 
     @Override
