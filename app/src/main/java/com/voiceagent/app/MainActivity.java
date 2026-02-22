@@ -19,8 +19,6 @@ import android.speech.tts.TextToSpeech;
 import android.speech.tts.UtteranceProgressListener;
 import android.util.Log;
 import android.view.View;
-import android.view.animation.AlphaAnimation;
-import android.view.animation.Animation;
 import android.widget.ImageView;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -46,45 +44,37 @@ import java.util.concurrent.TimeUnit;
 
 public class MainActivity extends AppCompatActivity {
 
-    private static final String TAG = "VoiceAgent";
+    private static final String TAG = "MainActivity";
     private static final int PERMISSION_CODE = 100;
     private static final String ACTION_ANSWER = "com.voiceagent.app.ACTION_ANSWER";
-    private static final String ACTION_REJECT = "com.voiceagent.app.ACTION_REJECT";
-    public static final String ACTION_TRANSFER_CALL = "com.voiceagent.app.TRANSFER_CALL";
+    public static final String ACTION_TRANSFER = "com.voiceagent.app.TRANSFER";
     
-    // API Key - will be replaced by GitHub Actions
     private static final String GROQ_API_KEY = "YOUR_GROQ_API_KEY";
 
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private ExecutorService executor;
 
-    // Components
     private SpeechRecognizer speechRecognizer = null;
     private TextToSpeech textToSpeech = null;
     private boolean isTTSReady = false;
     private boolean isRecognitionReady = false;
     private AudioManager audioManager;
 
-    // Language detection
     private String detectedLanguage = "en";
     private boolean sttBengaliBD = true;
 
-    // UI Elements
     private FloatingActionButton btnToggle;
     private TextView tvStatus, tvUser, tvAI, tvTitle;
     private ImageView tvIcon;
     private View circleView;
 
-    // State flags
     private boolean isConversationActive = false;
     private boolean isListening = false;
     private boolean isSpeaking = false;
     private boolean isDestroyed = false;
     
-    // Call handling
     private String incomingCallNumber = null;
     private boolean isCallActive = false;
-    private CallMonitorService callService;
     private boolean serviceBound = false;
 
     private final ServiceConnection serviceConnection = new ServiceConnection() {
@@ -108,34 +98,9 @@ public class MainActivity extends AppCompatActivity {
         
         Log.d(TAG, "=== Voice Agent Starting ===");
         
-        // Bind to CallMonitorService
-        Intent serviceIntent = new Intent(this, CallMonitorService.class);
-        startService(serviceIntent);
-        bindService(serviceIntent, serviceConnection, Context.BIND_AUTO_CREATE);
-        
-        // Set up call listener
-        CallMonitorService.listener = new CallMonitorService.CallListener() {
-            @Override
-            public void onIncomingCall(String number) {
-                Log.d(TAG, "Incoming call: " + number);
-            }
-
-            @Override
-            public void onCallAnswered() {
-                Log.d(TAG, "Call answered");
-            }
-
-            @Override
-            public void onCallEnded() {
-                Log.d(TAG, "Call ended");
-                mainHandler.post(() -> stopConversation());
-            }
-        };
+        audioManager = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
         
         initViews();
-        initAudioManager();
-        initSpeechRecognition();
-        initTextToSpeech();
         checkPermissions();
         
         executor = Executors.newSingleThreadExecutor();
@@ -149,12 +114,11 @@ public class MainActivity extends AppCompatActivity {
             String action = intent.getAction();
             String phoneNumber = intent.getStringExtra("phone_number");
             
-            Log.d(TAG, "handleIntent action: " + action + ", number: " + phoneNumber);
+            Log.d(TAG, "Action: " + action + ", Number: " + phoneNumber);
             
-            if (ACTION_TRANSFER_CALL.equals(action) || ACTION_ANSWER.equals(action)) {
+            if (ACTION_ANSWER.equals(action) || ACTION_TRANSFER.equals(action)) {
+                incomingCallNumber = phoneNumber;
                 transferCallToAgent(phoneNumber);
-            } else if (ACTION_REJECT.equals(action)) {
-                // Handle reject
             }
         }
     }
@@ -168,22 +132,17 @@ public class MainActivity extends AppCompatActivity {
         tvIcon = findViewById(R.id.tvIcon);
         circleView = findViewById(R.id.circleView);
         
-        btnToggle.setOnClickListener(v -> {
-            Log.d(TAG, "Button clicked");
-            toggleConversation();
-        });
+        btnToggle.setOnClickListener(v -> toggleConversation());
         
-        updateUIState("idle");
-    }
-
-    private void initAudioManager() {
-        audioManager = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
+        initSpeechRecognition();
+        initTextToSpeech();
+        
+        updateUI("idle");
     }
 
     private void initSpeechRecognition() {
         if (!SpeechRecognizer.isRecognitionAvailable(this)) {
             Log.e(TAG, "Speech recognition not available");
-            mainHandler.post(() -> Toast.makeText(this, "Speech recognition not available", Toast.LENGTH_LONG).show());
             return;
         }
         
@@ -206,22 +165,6 @@ public class MainActivity extends AppCompatActivity {
                     Log.e(TAG, "Speech error: " + error);
                     isListening = false;
                     
-                    if ((error == 7 || error == 8) && sttBengaliBD) {
-                        sttBengaliBD = false;
-                        mainHandler.postDelayed(() -> {
-                            if (isConversationActive && !isSpeaking) startListeningBengali();
-                        }, 300);
-                        return;
-                    }
-                    
-                    if ((error == 7 || error == 8) && !sttBengaliBD) {
-                        sttBengaliBD = true;
-                        mainHandler.postDelayed(() -> {
-                            if (isConversationActive && !isSpeaking) startListeningEnglish();
-                        }, 300);
-                        return;
-                    }
-                    
                     if (isConversationActive && !isSpeaking) {
                         retryOrRecover();
                     }
@@ -241,10 +184,8 @@ public class MainActivity extends AppCompatActivity {
                         detectedLanguage = hasBengali ? "bn" : "en";
                         
                         handleUserInput(text);
-                    } else {
-                        if (isConversationActive && !isSpeaking) {
-                            mainHandler.postDelayed(() -> startListening(), 300);
-                        }
+                    } else if (isConversationActive && !isSpeaking) {
+                        mainHandler.postDelayed(() -> startListening(), 500);
                     }
                 }
 
@@ -253,7 +194,7 @@ public class MainActivity extends AppCompatActivity {
             });
             
             isRecognitionReady = true;
-            Log.d(TAG, "Speech recognition initialized");
+            Log.d(TAG, "Speech recognition ready");
         } catch (Exception e) {
             Log.e(TAG, "Speech init error: " + e.getMessage());
         }
@@ -270,101 +211,106 @@ public class MainActivity extends AppCompatActivity {
                 textToSpeech.setOnUtteranceProgressListener(new UtteranceProgressListener() {
                     @Override
                     public void onStart(String utteranceId) {
-                        Log.d(TAG, "TTS started");
                         isSpeaking = true;
-                        mainHandler.post(() -> updateUIState("speaking"));
+                        mainHandler.post(() -> updateUI("speaking"));
                     }
 
                     @Override
                     public void onDone(String utteranceId) {
-                        Log.d(TAG, "TTS done");
                         isSpeaking = false;
                         mainHandler.post(() -> {
-                            updateUIState("idle");
+                            updateUI("idle");
                             if (isConversationActive) {
                                 mainHandler.postDelayed(() -> {
                                     if (isConversationActive && !isSpeaking && !isListening) {
                                         startListening();
                                     }
-                                }, 1000);
+                                }, 800);
                             }
                         });
                     }
 
                     @Override
                     public void onError(String utteranceId) {
-                        Log.e(TAG, "TTS error");
                         isSpeaking = false;
                         mainHandler.post(() -> {
-                            updateUIState("idle");
+                            updateUI("idle");
                             if (isConversationActive) {
-                                mainHandler.postDelayed(() -> {
-                                    if (isConversationActive && !isSpeaking && !isListening) {
-                                        startListening();
-                                    }
-                                }, 1000);
+                                retryOrRecover();
                             }
                         });
                     }
                 });
                 
-                Log.d(TAG, "TTS initialized");
+                Log.d(TAG, "TTS ready");
             } else {
-                Log.e(TAG, "TTS init failed: " + status);
-                isTTSReady = false;
+                Log.e(TAG, "TTS init failed");
             }
         });
     }
 
-    private void setTTSLanguage(String lang) {
-        if (textToSpeech == null || !isTTSReady) return;
-        
-        try {
-            if (lang.equals("bn")) {
-                Locale bengaliLocale = new Locale("bn", "BD");
-                int result = textToSpeech.setLanguage(bengaliLocale);
-                if (result == TextToSpeech.LANG_MISSING_DATA || result == TextToSpeech.LANG_NOT_SUPPORTED) {
-                    textToSpeech.setLanguage(Locale.US);
-                }
-            } else {
-                textToSpeech.setLanguage(Locale.US);
-            }
-        } catch (Exception e) {
-            Log.e(TAG, "TTS language error: " + e.getMessage());
-        }
-    }
-
     private void checkPermissions() {
-        ArrayList<String> permissionsNeeded = new ArrayList<>();
+        ArrayList<String> permissions = new ArrayList<>();
         
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-            permissionsNeeded.add(Manifest.permission.RECORD_AUDIO);
+            permissions.add(Manifest.permission.RECORD_AUDIO);
         }
         
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_PHONE_STATE) != PackageManager.PERMISSION_GRANTED) {
-            permissionsNeeded.add(Manifest.permission.READ_PHONE_STATE);
+            permissions.add(Manifest.permission.READ_PHONE_STATE);
         }
         
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.ANSWER_PHONE_CALLS) != PackageManager.PERMISSION_GRANTED) {
-            permissionsNeeded.add(Manifest.permission.ANSWER_PHONE_CALLS);
+            permissions.add(Manifest.permission.ANSWER_PHONE_CALLS);
         }
         
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.MODIFY_AUDIO_SETTINGS) != PackageManager.PERMISSION_GRANTED) {
-            permissionsNeeded.add(Manifest.permission.MODIFY_AUDIO_SETTINGS);
+            permissions.add(Manifest.permission.MODIFY_AUDIO_SETTINGS);
         }
         
-        if (!permissionsNeeded.isEmpty()) {
-            String[] permissions = permissionsNeeded.toArray(new String[0]);
-            ActivityCompat.requestPermissions(this, permissions, PERMISSION_CODE);
+        if (!permissions.isEmpty()) {
+            ActivityCompat.requestPermissions(this, permissions.toArray(new String[0]), PERMISSION_CODE);
         } else {
             startCallService();
         }
     }
 
     private void startCallService() {
-        Intent serviceIntent = new Intent(this, CallMonitorService.class);
-        serviceIntent.setAction(CallMonitorService.ACTION_START_SERVICE);
-        startService(serviceIntent);
+        try {
+            Intent serviceIntent = new Intent(this, CallMonitorService.class);
+            startService(serviceIntent);
+            bindService(serviceIntent, serviceConnection, Context.BIND_AUTO_CREATE);
+            
+            CallMonitorService.listener = new CallMonitorService.CallListener() {
+                @Override
+                public void onCallRinging(String number) {
+                    Log.d(TAG, "Call ringing: " + number);
+                    mainHandler.post(() -> {
+                        Toast.makeText(MainActivity.this, "Incoming call: " + number, Toast.LENGTH_LONG).show();
+                    });
+                }
+
+                @Override
+                public void onCallAnswered() {
+                    Log.d(TAG, "Call answered");
+                }
+
+                @Override
+                public void onCallEnded() {
+                    Log.d(TAG, "Call ended");
+                    mainHandler.post(() -> stopConversation());
+                }
+
+                @Override
+                public void onCallDisconnected() {
+                    Log.d(TAG, "Call disconnected");
+                }
+            };
+            
+            Log.d(TAG, "Call service started");
+        } catch (Exception e) {
+            Log.e(TAG, "Error starting service: " + e.getMessage());
+        }
     }
 
     @Override
@@ -383,10 +329,10 @@ public class MainActivity extends AppCompatActivity {
             final boolean granted = allGranted;
             mainHandler.post(() -> {
                 if (granted) {
-                    Toast.makeText(this, "✅ All permissions granted!", Toast.LENGTH_SHORT).show();
+                    Toast.makeText(this, "All permissions granted!", Toast.LENGTH_SHORT).show();
                     startCallService();
                 } else {
-                    Toast.makeText(this, "⚠️ Permissions needed for call features", Toast.LENGTH_LONG).show();
+                    Toast.makeText(this, "Permissions needed for call features", Toast.LENGTH_LONG).show();
                 }
             });
         }
@@ -402,20 +348,18 @@ public class MainActivity extends AppCompatActivity {
 
     private void startConversation() {
         if (isConversationActive) return;
-        
         if (!isTTSReady || !isRecognitionReady) {
-            mainHandler.post(() -> Toast.makeText(this, "Please wait... initializing", Toast.LENGTH_SHORT).show());
+            Toast.makeText(this, "Please wait...", Toast.LENGTH_SHORT).show();
             return;
         }
         
         isConversationActive = true;
         detectedLanguage = "en";
-        sttBengaliBD = true;
         
-        requestAudioFocus();
-        updateUIState("starting");
+        enableAudioMode();
+        updateUI("starting");
         
-        speak("Hello! I'm your voice assistant. How can I help you today?");
+        speak("Hello! I'm your voice assistant. How can I help you?");
     }
 
     private void stopConversation() {
@@ -425,12 +369,11 @@ public class MainActivity extends AppCompatActivity {
         isCallActive = false;
         
         try {
-            if (speechRecognizer != null) speechRecognizer.stopListening();
+            if (speechRecognizer != null) speechRecognizer.cancel();
             if (textToSpeech != null) textToSpeech.stop();
             if (audioManager != null) {
                 audioManager.setMode(AudioManager.MODE_NORMAL);
                 audioManager.setSpeakerphoneOn(false);
-                audioManager.abandonAudioFocus(null);
             }
         } catch (Exception e) { 
             Log.e(TAG, "Stop error: " + e.getMessage()); 
@@ -443,7 +386,7 @@ public class MainActivity extends AppCompatActivity {
             if (tvStatus != null) tvStatus.setText("Tap to start");
             if (tvUser != null) tvUser.setText("You: ...");
             if (tvAI != null) tvAI.setText("AI: ...");
-            updateUIState("idle");
+            updateUI("idle");
         });
     }
 
@@ -462,74 +405,34 @@ public class MainActivity extends AppCompatActivity {
             intent.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3);
             
             isListening = true;
-            updateUIState("listening");
+            updateUI("listening");
             
             speechRecognizer.startListening(intent);
-            Log.d(TAG, "Started listening (Bengali BD)");
+            Log.d(TAG, "Started listening");
+            
+            // Auto-stop after 5 seconds if no result
+            mainHandler.postDelayed(() -> {
+                if (isListening) {
+                    try {
+                        speechRecognizer.stopListening();
+                    } catch (Exception e) {}
+                }
+            }, 5000);
             
         } catch (Exception e) {
             Log.e(TAG, "Error starting listening: " + e.getMessage());
             retryOrRecover();
         }
     }
-    
-    private void startListeningEnglish() {
-        if (isDestroyed || !isConversationActive || isSpeaking || isListening) return;
-        if (speechRecognizer == null) return;
-        
-        try {
-            Intent intent = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
-            intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
-            intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, "en-US");
-            intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, "en-US");
-            intent.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true);
-            intent.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3);
-            
-            isListening = true;
-            updateUIState("listening");
-            
-            speechRecognizer.startListening(intent);
-            Log.d(TAG, "Started listening (English)");
-            
-        } catch (Exception e) {
-            Log.e(TAG, "Error starting English: " + e.getMessage());
-            retryOrRecover();
-        }
-    }
-    
-    private void startListeningBengali() {
-        if (isDestroyed || !isConversationActive || isSpeaking || isListening) return;
-        if (speechRecognizer == null) return;
-        
-        try {
-            Intent intent = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
-            intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
-            intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, "bn");
-            intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, "bn");
-            intent.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true);
-            intent.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3);
-            
-            isListening = true;
-            updateUIState("listening");
-            
-            speechRecognizer.startListening(intent);
-            Log.d(TAG, "Started listening (Bengali)");
-            
-        } catch (Exception e) {
-            Log.e(TAG, "Error starting Bengali: " + e.getMessage());
-            retryOrRecover();
-        }
-    }
 
     private void handleUserInput(String text) {
         if (text == null || text.trim().isEmpty()) { 
-            sttBengaliBD = true;
             startListening(); 
             return; 
         }
         
         String lowerText = text.toLowerCase();
-        if (lowerText.contains("stop") || lowerText.contains("বন্ধ") || lowerText.contains("থাম")) { 
+        if (lowerText.contains("stop") || lowerText.contains("বন্ধ")) { 
             stopConversation(); 
             return; 
         }
@@ -538,12 +441,11 @@ public class MainActivity extends AppCompatActivity {
             mainHandler.post(() -> tvUser.setText("You: " + text));
         }
         
-        sttBengaliBD = true;
         processWithAI(text);
     }
 
     private void processWithAI(String input) {
-        updateUIState("thinking");
+        updateUI("thinking");
         
         executor.execute(() -> {
             try {
@@ -558,12 +460,9 @@ public class MainActivity extends AppCompatActivity {
             } catch (Exception e) {
                 Log.e(TAG, "AI error: " + e.getMessage());
                 mainHandler.post(() -> {
-                    String errorMsg = detectedLanguage.equals("bn") ? "দুঃখিত, সমস্যা হয়েছে।" : "Sorry, I encountered an error.";
+                    String errorMsg = detectedLanguage.equals("bn") ? "দুঃখিত।" : "Sorry, I didn't understand.";
                     if (tvAI != null) tvAI.setText("AI: " + errorMsg);
                     speak(errorMsg);
-                    mainHandler.postDelayed(() -> {
-                        if (isConversationActive && !isSpeaking) startListening();
-                    }, 2000);
                 });
             }
         });
@@ -573,12 +472,9 @@ public class MainActivity extends AppCompatActivity {
         URL url = new URL("https://api.groq.com/openai/v1/chat/completions");
         HttpURLConnection conn = (HttpURLConnection) url.openConnection();
         
-        String systemPrompt;
-        if (lang.equals("bn")) {
-            systemPrompt = "আপনি একজন বন্ধুসুলভ ফোন সহকারী। উত্তর দিন সংক্ষেপে।";
-        } else {
-            systemPrompt = "You are a friendly phone assistant. Keep responses short, conversational, and helpful.";
-        }
+        String systemPrompt = lang.equals("bn") ? 
+            "আপনি বন্ধুসুলভ সহকারী। উত্তর দিন সংক্ষেপে বাংলায়।" :
+            "You are a friendly phone assistant. Keep responses short.";
         
         try {
             conn.setRequestMethod("POST");
@@ -617,49 +513,59 @@ public class MainActivity extends AppCompatActivity {
         
         try {
             isSpeaking = true;
-            updateUIState("speaking");
-            
-            Bundle params = new Bundle();
-            params.putString(TextToSpeech.Engine.KEY_PARAM_UTTERANCE_ID, "utterance");
+            updateUI("speaking");
             
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                textToSpeech.speak(text, TextToSpeech.QUEUE_FLUSH, params, "utterance");
+                textToSpeech.speak(text, TextToSpeech.QUEUE_FLUSH, null, "utterance");
             } else {
                 textToSpeech.speak(text, TextToSpeech.QUEUE_FLUSH, null);
             }
         } catch (Exception e) {
             Log.e(TAG, "TTS error: " + e.getMessage());
             isSpeaking = false;
-            updateUIState("idle");
+            updateUI("idle");
         }
     }
 
-    private void requestAudioFocus() {
+    private void setTTSLanguage(String lang) {
+        if (textToSpeech == null || !isTTSReady) return;
+        
+        try {
+            if (lang.equals("bn")) {
+                int result = textToSpeech.setLanguage(new Locale("bn", "BD"));
+                if (result == TextToSpeech.LANG_MISSING_DATA || result == TextToSpeech.LANG_NOT_SUPPORTED) {
+                    textToSpeech.setLanguage(Locale.US);
+                }
+            } else {
+                textToSpeech.setLanguage(Locale.US);
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "TTS language error: " + e.getMessage());
+        }
+    }
+
+    private void enableAudioMode() {
         try {
             if (audioManager == null) {
                 audioManager = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
             }
             audioManager.setMode(AudioManager.MODE_IN_COMMUNICATION);
+            audioManager.setSpeakerphoneOn(true);
             audioManager.requestAudioFocus(null, AudioManager.STREAM_VOICE_CALL, AudioManager.AUDIOFOCUS_GAIN_TRANSIENT);
         } catch (Exception e) { 
-            Log.e(TAG, "Audio focus error: " + e.getMessage()); 
+            Log.e(TAG, "Audio mode error: " + e.getMessage()); 
         }
     }
 
     private void retryOrRecover() {
-        if (isConversationActive) {
-            sttBengaliBD = true;
-            mainHandler.postDelayed(() -> {
-                if (isConversationActive && !isSpeaking && !isListening) {
-                    startListening();
-                }
-            }, 1000);
+        if (isConversationActive && !isSpeaking) {
+            mainHandler.postDelayed(this::startListening, 1000);
         }
     }
 
-    private void updateUIState(String state) {
+    private void updateUI(String state) {
         try {
-            if (isDestroyed) return;
+            if (isDestroyed || circleView == null || tvStatus == null) return;
             
             int bgColor;
             String statusText;
@@ -681,8 +587,8 @@ public class MainActivity extends AppCompatActivity {
                     bgColor = 0xFF1A1A2E; statusText = "Tap to start";
             }
             
-            if (circleView != null) circleView.setBackgroundColor(bgColor);
-            if (tvStatus != null) tvStatus.setText(statusText);
+            circleView.setBackgroundColor(bgColor);
+            tvStatus.setText(statusText);
             
         } catch (Exception e) { 
             Log.e(TAG, "UI error: " + e.getMessage()); 
@@ -696,14 +602,18 @@ public class MainActivity extends AppCompatActivity {
         isConversationActive = true;
         detectedLanguage = "en";
         
-        enableFullAudioMode();
+        // Enable full audio
+        enableAudioMode();
         
+        // Bring to front
         Intent intent = new Intent(this, MainActivity.class);
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
         startActivity(intent);
         
+        // Greet caller
         speak("Hello! This is an AI assistant. How can I help you?");
         
+        // Start listening after greeting
         mainHandler.postDelayed(() -> {
             if (isConversationActive && !isSpeaking) {
                 startListening();
@@ -711,25 +621,8 @@ public class MainActivity extends AppCompatActivity {
         }, 3000);
         
         mainHandler.post(() -> 
-            Toast.makeText(this, "🤖 AI Agent connected!", Toast.LENGTH_LONG).show()
+            Toast.makeText(this, "AI Agent Connected!", Toast.LENGTH_LONG).show()
         );
-    }
-    
-    private void enableFullAudioMode() {
-        try {
-            audioManager.setMode(AudioManager.MODE_IN_COMMUNICATION);
-            audioManager.setSpeakerphoneOn(true);
-            
-            int maxVolume = audioManager.getStreamMaxVolume(AudioManager.STREAM_VOICE_CALL);
-            audioManager.setStreamVolume(AudioManager.STREAM_VOICE_CALL, maxVolume, 0);
-            
-            audioManager.requestAudioFocus(null, AudioManager.STREAM_VOICE_CALL, 
-                AudioManager.AUDIOFOCUS_GAIN_TRANSIENT);
-            
-            Log.d(TAG, "Full audio mode enabled");
-        } catch (Exception e) {
-            Log.e(TAG, "Audio mode error: " + e.getMessage());
-        }
     }
     
     @Override
@@ -740,7 +633,7 @@ public class MainActivity extends AppCompatActivity {
 
     @Override
     protected void onDestroy() {
-        Log.d(TAG, "onDestroy called");
+        Log.d(TAG, "onDestroy");
         isDestroyed = true;
         
         try {
