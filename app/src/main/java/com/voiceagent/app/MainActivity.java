@@ -18,7 +18,7 @@ import android.speech.RecognizerIntent;
 import android.speech.SpeechRecognizer;
 import android.speech.tts.TextToSpeech;
 import android.speech.tts.UtteranceProgressListener;
-import android.telephony.TelephonyManager;
+import android.telecom.TelecomManager;
 import android.util.Log;
 import android.view.View;
 import android.view.animation.Animation;
@@ -341,6 +341,14 @@ public class MainActivity extends AppCompatActivity implements CallReceiver.Call
         
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_PHONE_STATE) != PackageManager.PERMISSION_GRANTED) {
             permissionsNeeded.add(Manifest.permission.READ_PHONE_STATE);
+        }
+        
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.ANSWER_PHONE_CALLS) != PackageManager.PERMISSION_GRANTED) {
+            permissionsNeeded.add(Manifest.permission.ANSWER_PHONE_CALLS);
+        }
+        
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.MODIFY_AUDIO_SETTINGS) != PackageManager.PERMISSION_GRANTED) {
+            permissionsNeeded.add(Manifest.permission.MODIFY_AUDIO_SETTINGS);
         }
         
         if (!permissionsNeeded.isEmpty()) {
@@ -747,26 +755,100 @@ public class MainActivity extends AppCompatActivity implements CallReceiver.Call
         isConversationActive = true;
         detectedLanguage = "en";
         
-        // Bring app to foreground
+        // Step 1: Answer the call automatically
+        answerCall();
+        
+        // Step 2: Bring app to foreground
         Intent intent = new Intent(this, MainActivity.class);
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
         startActivity(intent);
         
-        // Request audio focus and start conversation
+        // Step 3: Enable speaker and set audio mode for voice call
+        enableSpeakerAndAudioMode();
+        
+        // Step 4: Request audio focus
         requestAudioFocus();
         updateUIState("starting");
         
-        // Greet the caller through AI
+        // Step 5: Greet the caller through AI
         String greeting = "Hello! This is an AI assistant. How can I help you today?";
         speak(greeting);
         
+        // Step 6: Start listening after greeting
         mainHandler.postDelayed(() -> {
             if (isCallActive && !isSpeaking) {
                 startListening();
             }
-        }, 2000);
+        }, 3000);
         
         Toast.makeText(this, "Call transferred to AI Agent", Toast.LENGTH_LONG).show();
+    }
+    
+    // Automatically answer the incoming call
+    private void answerCall() {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                TelecomManager telecomManager = (TelecomManager) getSystemService(Context.TELECOM_SERVICE);
+                if (telecomManager != null) {
+                    // Try to answer the call
+                    telecomManager.acceptRingingCall();
+                    Log.d(TAG, "Call answered successfully");
+                }
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "Error answering call: " + e.getMessage());
+            // Fallback: try using ITelecomService via reflection
+            try {
+                answerCallLegacy();
+            } catch (Exception ex) {
+                Log.e(TAG, "Legacy answer also failed: " + ex.getMessage());
+            }
+        }
+    }
+    
+    // Legacy answer call method for older Android versions
+    private void answerCallLegacy() {
+        try {
+            Intent intent = new Intent(Intent.ACTION_ANSWER);
+            intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            startActivity(intent);
+        } catch (Exception e) {
+            Log.e(TAG, "Legacy answer error: " + e.getMessage());
+        }
+    }
+    
+    // Enable speaker and configure audio for 2-way conversation
+    private void enableSpeakerAndAudioMode() {
+        try {
+            // Set audio mode to VOICE_COMMUNICATION for proper call routing
+            audioManager.setMode(AudioManager.MODE_IN_COMMUNICATION);
+            
+            // Enable speaker
+            audioManager.setSpeakerphoneOn(true);
+            
+            // Ensure volume is up
+            audioManager.setStreamVolume(AudioManager.STREAM_VOICE_CALL, 
+                audioManager.getStreamMaxVolume(AudioManager.STREAM_VOICE_CALL), 0);
+            
+            // Request audio focus for call
+            audioManager.requestAudioFocus(null, AudioManager.STREAM_VOICE_CALL, 
+                AudioManager.AUDIOFOCUS_GAIN_TRANSIENT);
+            
+            Log.d(TAG, "Speaker enabled and audio mode set for 2-way conversation");
+        } catch (Exception e) {
+            Log.e(TAG, "Error setting speaker: " + e.getMessage());
+        }
+    }
+    
+    // Disable speaker when call ends
+    private void disableSpeaker() {
+        try {
+            audioManager.setSpeakerphoneOn(false);
+            audioManager.setMode(AudioManager.MODE_NORMAL);
+            Log.d(TAG, "Speaker disabled");
+        } catch (Exception e) {
+            Log.e(TAG, "Error disabling speaker: " + e.getMessage());
+        }
     }
     
     // CallReceiver.CallListener implementation
