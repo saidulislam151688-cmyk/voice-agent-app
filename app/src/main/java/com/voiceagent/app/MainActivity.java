@@ -14,16 +14,18 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.provider.Settings;
 import android.speech.RecognitionListener;
 import android.speech.RecognizerIntent;
 import android.speech.SpeechRecognizer;
 import android.speech.tts.TextToSpeech;
+import android.speech.tts.UtteranceResultsHandler;
 import android.speech.tts.UtteranceProgressListener;
 import android.telecom.TelecomManager;
 import android.util.Log;
 import android.view.View;
+import android.view.animation.AlphaAnimation;
 import android.view.animation.Animation;
-import android.view.animation.AnimationUtils;
 import android.widget.ImageView;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -52,6 +54,7 @@ public class MainActivity extends AppCompatActivity implements CallReceiver.Call
 
     private static final String TAG = "VoiceAgent";
     private static final int PERMISSION_CODE = 100;
+    private static final int ANSWER_CALL_CODE = 101;
     private static final String CHANNEL_ID = "voice_agent_call_channel";
     private static final int NOTIFICATION_ID = 1001;
     private static final String ACTION_ANSWER = "com.voiceagent.app.ACTION_ANSWER";
@@ -60,22 +63,19 @@ public class MainActivity extends AppCompatActivity implements CallReceiver.Call
     // API Key - will be replaced by GitHub Actions
     private static final String GROQ_API_KEY = "YOUR_GROQ_API_KEY";
 
-    // State Machine
-    private enum ConversationState { IDLE, LISTENING, PROCESSING, SPEAKING }
-    private ConversationState currentState = ConversationState.IDLE;
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
+    private ExecutorService executor;
 
     // Components
     private SpeechRecognizer speechRecognizer = null;
     private TextToSpeech textToSpeech = null;
     private boolean isTTSReady = false;
     private boolean isRecognitionReady = false;
-    private ExecutorService executor;
     private AudioManager audioManager;
 
     // Language detection
     private String detectedLanguage = "en";
-    private String[] supportedLanguages = {"en", "bn"};
+    private boolean sttBengaliBD = true;
 
     // UI Elements
     private FloatingActionButton btnToggle;
@@ -83,7 +83,7 @@ public class MainActivity extends AppCompatActivity implements CallReceiver.Call
     private ImageView tvIcon;
     private View circleView;
 
-    // Flags
+    // State flags
     private boolean isConversationActive = false;
     private boolean isListening = false;
     private boolean isSpeaking = false;
@@ -102,14 +102,10 @@ public class MainActivity extends AppCompatActivity implements CallReceiver.Call
         
         Log.d(TAG, "=== Voice Agent Starting ===");
         
-        // Initialize notification manager
         notificationManager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
         createNotificationChannel();
-        
-        // Register for notification actions
         registerNotificationActions();
         
-        // Register call receiver
         CallReceiver.setListener(this);
         
         initViews();
@@ -119,11 +115,9 @@ public class MainActivity extends AppCompatActivity implements CallReceiver.Call
         checkPermissions();
         
         executor = Executors.newSingleThreadExecutor();
-        
-        // Handle intent if app was started from notification
         handleIntent(getIntent());
         
-        Log.d(TAG, "Voice Agent started successfully");
+        Log.d(TAG, "Voice Agent started");
     }
     
     private void handleIntent(Intent intent) {
@@ -146,7 +140,7 @@ public class MainActivity extends AppCompatActivity implements CallReceiver.Call
             public void onReceive(Context context, Intent intent) {
                 String action = intent.getAction();
                 String phoneNumber = intent.getStringExtra("phone_number");
-                Log.d(TAG, "Notification action received: " + action);
+                Log.d(TAG, "Notification action: " + action);
                 
                 if (ACTION_ANSWER.equals(action)) {
                     transferCallToAgent(phoneNumber);
@@ -159,10 +153,15 @@ public class MainActivity extends AppCompatActivity implements CallReceiver.Call
         IntentFilter filter = new IntentFilter();
         filter.addAction(ACTION_ANSWER);
         filter.addAction(ACTION_REJECT);
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            registerReceiver(notificationActionReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
-        } else {
-            registerReceiver(notificationActionReceiver, filter);
+        
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                registerReceiver(notificationActionReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
+            } else {
+                registerReceiver(notificationActionReceiver, filter);
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "Register receiver error: " + e.getMessage());
         }
     }
 
@@ -175,7 +174,11 @@ public class MainActivity extends AppCompatActivity implements CallReceiver.Call
         tvIcon = findViewById(R.id.tvIcon);
         circleView = findViewById(R.id.circleView);
         
-        btnToggle.setOnClickListener(v -> toggleConversation());
+        btnToggle.setOnClickListener(v -> {
+            Log.d(TAG, "Button clicked, isConversationActive: " + isConversationActive);
+            toggleConversation();
+        });
+        
         updateUIState("idle");
     }
 
@@ -183,113 +186,91 @@ public class MainActivity extends AppCompatActivity implements CallReceiver.Call
         audioManager = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
     }
 
-    private boolean sttBengaliBD = true;
-    
     private void initSpeechRecognition() {
         if (!SpeechRecognizer.isRecognitionAvailable(this)) {
             Log.e(TAG, "Speech recognition not available");
-            Toast.makeText(this, "Speech recognition not available", Toast.LENGTH_LONG).show();
+            mainHandler.post(() -> Toast.makeText(this, "Speech recognition not available", Toast.LENGTH_LONG).show());
             return;
         }
         
-        speechRecognizer = SpeechRecognizer.createSpeechRecognizer(this);
-        speechRecognizer.setRecognitionListener(new RecognitionListener() {
-            @Override public void onReadyForSpeech(Bundle params) { 
-                Log.d(TAG, "Ready for speech"); 
-            }
-            @Override public void onBeginningOfSpeech() {}
-            @Override public void onRmsChanged(float rmsdB) {}
-            @Override public void onBufferReceived(byte[] buffer) {}
-            @Override public void onEndOfSpeech() { 
-                Log.d(TAG, "End of speech"); 
-                isListening = false; 
-            }
+        try {
+            speechRecognizer = SpeechRecognizer.createSpeechRecognizer(this);
+            speechRecognizer.setRecognitionListener(new RecognitionListener() {
+                @Override public void onReadyForSpeech(Bundle params) { 
+                    Log.d(TAG, "Ready for speech"); 
+                }
+                @Override public void onBeginningOfSpeech() {}
+                @Override public void onRmsChanged(float rmsdB) {}
+                @Override public void onBufferReceived(byte[] buffer) {}
+                @Override public void onEndOfSpeech() { 
+                    Log.d(TAG, "End of speech"); 
+                    isListening = false; 
+                }
 
-            @Override
-            public void onError(int error) {
-                Log.e(TAG, "Speech error: " + error + " (Bengali BD: " + sttBengaliBD + ")");
-                isListening = false;
-                
-                if ((error == SpeechRecognizer.ERROR_NO_MATCH || error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT) && sttBengaliBD) {
-                    if (isConversationActive && !isSpeaking) {
+                @Override
+                public void onError(int error) {
+                    Log.e(TAG, "Speech error: " + error + " (Bengali BD: " + sttBengaliBD + ")");
+                    isListening = false;
+                    
+                    // Try Bengali first, then English, then retry
+                    if ((error == 7 || error == 8) && sttBengaliBD) { // NO_MATCH or TIMEOUT
                         sttBengaliBD = false;
-                        mainHandler.postDelayed(() -> startListeningBengaliGeneric(), 300);
+                        mainHandler.postDelayed(() -> {
+                            if (isConversationActive && !isSpeaking) startListeningBengaliGeneric();
+                        }, 300);
                         return;
                     }
-                }
-                
-                if (error == SpeechRecognizer.ERROR_NO_MATCH || error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT) {
+                    
+                    if ((error == 7 || error == 8) && !sttBengaliBD) {
+                        sttBengaliBD = true;
+                        mainHandler.postDelayed(() -> {
+                            if (isConversationActive && !isSpeaking) startListeningEnglish();
+                        }, 300);
+                        return;
+                    }
+                    
                     if (isConversationActive && !isSpeaking) {
-                        mainHandler.postDelayed(() -> startListeningEnglish(), 300);
-                        return;
+                        retryOrRecover();
                     }
                 }
-                
-                if (isConversationActive && !isSpeaking) {
-                    retryOrRecover();
-                }
-            }
 
-            @Override
-            public void onResults(Bundle results) {
-                Log.d(TAG, "Got results");
-                isListening = false;
-                
-                ArrayList<String> matches = results.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
-                if (matches != null && !matches.isEmpty()) {
-                    String text = matches.get(0);
-                    Log.d(TAG, "Recognized: " + text);
+                @Override
+                public void onResults(Bundle results) {
+                    Log.d(TAG, "Got results");
+                    isListening = false;
                     
-                    boolean hasBengaliChars = containsBengaliCharacters(text);
-                    
-                    if (hasBengaliChars) {
-                        detectedLanguage = "bn";
-                    } else if (isLikelyEnglish(text)) {
-                        detectedLanguage = "en";
+                    ArrayList<String> matches = results.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
+                    if (matches != null && !matches.isEmpty()) {
+                        String text = matches.get(0);
+                        Log.d(TAG, "Recognized: " + text);
+                        
+                        boolean hasBengali = text.matches(".*[\\u0980-\\u09FF].*");
+                        detectedLanguage = hasBengali ? "bn" : "en";
+                        
+                        handleUserInput(text);
                     } else {
-                        detectedLanguage = "en";
-                    }
-                    
-                    handleUserInput(text);
-                } else {
-                    if (isConversationActive && !isSpeaking) {
-                        mainHandler.postDelayed(() -> startListening(), 300);
+                        if (isConversationActive && !isSpeaking) {
+                            mainHandler.postDelayed(() -> startListening(), 300);
+                        }
                     }
                 }
-            }
 
-            @Override public void onPartialResults(Bundle bundle) {}
-            @Override public void onEvent(int i, Bundle bundle) {}
-        });
-        
-        isRecognitionReady = true;
-        Log.d(TAG, "Speech recognition initialized");
-    }
-    
-    private boolean containsBengaliCharacters(String text) {
-        if (text == null || text.isEmpty()) return false;
-        return text.matches(".*[\\u0980-\\u09FF].*");
-    }
-    
-    private boolean isLikelyEnglish(String text) {
-        if (text == null || text.isEmpty()) return false;
-        String lower = text.toLowerCase();
-        String[] englishWords = {"hello", "hi", "what", "how", "are", "you", "the", "is", "can", "help", "me", "thanks", "thank", "please", "good", "bad", "yes", "no", "want", "need", "call", "phone"};
-        for (String word : englishWords) {
-            if (lower.contains(word)) return true;
+                @Override public void onPartialResults(Bundle bundle) {}
+                @Override public void onEvent(int i, Bundle bundle) {}
+            });
+            
+            isRecognitionReady = true;
+            Log.d(TAG, "Speech recognition initialized");
+        } catch (Exception e) {
+            Log.e(TAG, "Speech init error: " + e.getMessage());
         }
-        int asciiCount = 0;
-        for (char c : text.toCharArray()) {
-            if (c >= 'a' && c <= 'z') asciiCount++;
-        }
-        return asciiCount > text.length() * 0.5;
     }
 
     private void initTextToSpeech() {
         textToSpeech = new TextToSpeech(this, status -> {
             if (status == TextToSpeech.SUCCESS) {
                 isTTSReady = true;
-                textToSpeech.setLanguage(Locale.forLanguageTag("en-US"));
+                textToSpeech.setLanguage(Locale.US);
                 textToSpeech.setSpeechRate(1.0f);
                 textToSpeech.setPitch(1.0f);
                 
@@ -308,25 +289,33 @@ public class MainActivity extends AppCompatActivity implements CallReceiver.Call
                         mainHandler.post(() -> {
                             updateUIState("idle");
                             if (isConversationActive) {
-                                mainHandler.postDelayed(() -> startListening(), 800);
+                                mainHandler.postDelayed(() -> {
+                                    if (isConversationActive && !isSpeaking) {
+                                        startListening();
+                                    }
+                                }, 1000);
                             }
                         });
                     }
 
                     @Override
                     public void onError(String utteranceId) {
-                        Log.e(TAG, "TTS error");
+                        Log.e(TAG, "TTS error: " + utteranceId);
                         isSpeaking = false;
                         mainHandler.post(() -> {
                             updateUIState("idle");
                             if (isConversationActive) {
-                                mainHandler.postDelayed(() -> startListening(), 500);
+                                mainHandler.postDelayed(() -> {
+                                    if (isConversationActive && !isSpeaking) {
+                                        startListening();
+                                    }
+                                }, 1000);
                             }
                         });
                     }
                 });
                 
-                Log.d(TAG, "TTS initialized successfully");
+                Log.d(TAG, "TTS initialized");
             } else {
                 Log.e(TAG, "TTS init failed: " + status);
                 isTTSReady = false;
@@ -341,7 +330,6 @@ public class MainActivity extends AppCompatActivity implements CallReceiver.Call
             if (lang.equals("bn")) {
                 Locale bengaliLocale = new Locale("bn", "BD");
                 int result = textToSpeech.setLanguage(bengaliLocale);
-                Log.d(TAG, "TTS Bengali set result: " + result);
                 if (result == TextToSpeech.LANG_MISSING_DATA || result == TextToSpeech.LANG_NOT_SUPPORTED) {
                     textToSpeech.setLanguage(Locale.US);
                 }
@@ -350,9 +338,6 @@ public class MainActivity extends AppCompatActivity implements CallReceiver.Call
             }
         } catch (Exception e) {
             Log.e(TAG, "TTS language error: " + e.getMessage());
-            try {
-                textToSpeech.setLanguage(Locale.US);
-            } catch (Exception ex) {}
         }
     }
 
@@ -384,6 +369,7 @@ public class MainActivity extends AppCompatActivity implements CallReceiver.Call
     @Override
     public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        
         if (requestCode == PERMISSION_CODE) {
             boolean allGranted = true;
             for (int result : grantResults) {
@@ -392,23 +378,48 @@ public class MainActivity extends AppCompatActivity implements CallReceiver.Call
                     break;
                 }
             }
-            if (allGranted) {
-                Toast.makeText(this, "✅ All permissions granted!", Toast.LENGTH_SHORT).show();
-            } else {
-                Toast.makeText(this, "⚠️ Some permissions denied. Features may not work fully.", Toast.LENGTH_LONG).show();
+            
+            mainHandler.post(() -> {
+                if (allGranted) {
+                    Toast.makeText(this, "✅ All permissions granted!", Toast.LENGTH_SHORT).show();
+                } else {
+                    Toast.makeText(this, "⚠️ Some permissions denied", Toast.LENGTH_LONG).show();
+                }
+            });
+        } else if (requestCode == ANSWER_CALL_CODE) {
+            if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+                answerCall();
             }
         }
     }
 
     private void toggleConversation() {
-        if (isConversationActive) stopConversation();
-        else startConversation();
+        Log.d(TAG, "toggleConversation called, active: " + isConversationActive);
+        
+        if (isConversationActive) {
+            stopConversation();
+        } else {
+            startConversation();
+        }
     }
 
     private void startConversation() {
-        if (isConversationActive) return;
-        if (!isTTSReady || !isRecognitionReady) {
-            Toast.makeText(this, "Please wait... initializing", Toast.LENGTH_SHORT).show();
+        Log.d(TAG, "startConversation called");
+        
+        if (isConversationActive) {
+            Log.d(TAG, "Already active, returning");
+            return;
+        }
+        
+        if (!isTTSReady) {
+            Log.e(TAG, "TTS not ready");
+            mainHandler.post(() -> Toast.makeText(this, "Please wait... TTS initializing", Toast.LENGTH_SHORT).show());
+            return;
+        }
+        
+        if (!isRecognitionReady) {
+            Log.e(TAG, "Recognition not ready");
+            mainHandler.post(() -> Toast.makeText(this, "Please wait... Speech initializing", Toast.LENGTH_SHORT).show());
             return;
         }
         
@@ -416,45 +427,64 @@ public class MainActivity extends AppCompatActivity implements CallReceiver.Call
         detectedLanguage = "en";
         sttBengaliBD = true;
         
+        Log.d(TAG, "Setting audio mode and requesting focus");
         requestAudioFocus();
         updateUIState("starting");
         
-        speak("Hello! I'm your voice assistant. What would you like to talk about?");
+        Log.d(TAG, "Speaking greeting");
+        speak("Hello! I'm your voice assistant. How can I help you today?");
         
-        mainHandler.postDelayed(() -> {
-            if (isConversationActive && !isSpeaking) startListening();
-        }, 1500);
+        // Start listening after greeting (handled by onDone callback in speak)
     }
 
     private void stopConversation() {
+        Log.d(TAG, "stopConversation called");
+        
         if (!isConversationActive) return;
         
         isConversationActive = false;
         isCallActive = false;
         
         try {
-            if (speechRecognizer != null) speechRecognizer.stopListening();
-            if (textToSpeech != null) textToSpeech.stop();
-            audioManager.abandonAudioFocus(null);
-            audioManager.setMode(AudioManager.MODE_NORMAL);
-            audioManager.setSpeakerphoneOn(false);
-        } catch (Exception e) { Log.e(TAG, "Stop error: " + e.getMessage()); }
+            if (speechRecognizer != null) {
+                try { speechRecognizer.stopListening(); } catch (Exception e) {}
+            }
+            if (textToSpeech != null) {
+                try { textToSpeech.stop(); } catch (Exception e) {}
+            }
+            if (audioManager != null) {
+                audioManager.setMode(AudioManager.MODE_NORMAL);
+                audioManager.setSpeakerphoneOn(false);
+                audioManager.abandonAudioFocus(null);
+            }
+        } catch (Exception e) { 
+            Log.e(TAG, "Stop error: " + e.getMessage()); 
+        }
         
         isListening = false;
         isSpeaking = false;
         
         mainHandler.post(() -> {
-            tvStatus.setText("Tap to start");
-            tvUser.setText("You: ...");
-            tvAI.setText("AI: ...");
+            if (tvStatus != null) tvStatus.setText("Tap to start");
+            if (tvUser != null) tvUser.setText("You: ...");
+            if (tvAI != null) tvAI.setText("AI: ...");
             updateUIState("idle");
             stopAnimations();
         });
     }
 
     private void startListening() {
-        if (isDestroyed || !isConversationActive || isSpeaking) return;
-        if (speechRecognizer == null) return;
+        Log.d(TAG, "startListening called, active: " + isConversationActive + ", speaking: " + isSpeaking);
+        
+        if (isDestroyed || !isConversationActive || isSpeaking || isListening) {
+            Log.d(TAG, "Cannot start listening, returning");
+            return;
+        }
+        
+        if (speechRecognizer == null) {
+            Log.e(TAG, "Speech recognizer is null");
+            return;
+        }
         
         sttBengaliBD = true;
         
@@ -462,7 +492,7 @@ public class MainActivity extends AppCompatActivity implements CallReceiver.Call
             Intent intent = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
             intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
             intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, "bn-BD");
-            intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, "bn");
+            intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, "bn-BD");
             intent.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true);
             intent.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3);
             
@@ -470,7 +500,7 @@ public class MainActivity extends AppCompatActivity implements CallReceiver.Call
             updateUIState("listening");
             
             speechRecognizer.startListening(intent);
-            Log.d(TAG, "Started listening (Bengali BD mode)");
+            Log.d(TAG, "Started listening (Bengali BD)");
             
         } catch (Exception e) {
             Log.e(TAG, "Error starting listening: " + e.getMessage());
@@ -479,14 +509,14 @@ public class MainActivity extends AppCompatActivity implements CallReceiver.Call
     }
     
     private void startListeningEnglish() {
-        if (isDestroyed || !isConversationActive || isSpeaking) return;
+        if (isDestroyed || !isConversationActive || isSpeaking || isListening) return;
         if (speechRecognizer == null) return;
         
         try {
             Intent intent = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
             intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
             intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, "en-US");
-            intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, "en");
+            intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, "en-US");
             intent.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true);
             intent.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3);
             
@@ -494,16 +524,16 @@ public class MainActivity extends AppCompatActivity implements CallReceiver.Call
             updateUIState("listening");
             
             speechRecognizer.startListening(intent);
-            Log.d(TAG, "Started listening (English mode)");
+            Log.d(TAG, "Started listening (English)");
             
         } catch (Exception e) {
-            Log.e(TAG, "Error starting English listening: " + e.getMessage());
+            Log.e(TAG, "Error starting English: " + e.getMessage());
             retryOrRecover();
         }
     }
     
     private void startListeningBengaliGeneric() {
-        if (isDestroyed || !isConversationActive || isSpeaking) return;
+        if (isDestroyed || !isConversationActive || isSpeaking || isListening) return;
         if (speechRecognizer == null) return;
         
         try {
@@ -518,7 +548,7 @@ public class MainActivity extends AppCompatActivity implements CallReceiver.Call
             updateUIState("listening");
             
             speechRecognizer.startListening(intent);
-            Log.d(TAG, "Started listening (Bengali generic mode)");
+            Log.d(TAG, "Started listening (Bengali)");
             
         } catch (Exception e) {
             Log.e(TAG, "Error starting Bengali generic: " + e.getMessage());
@@ -533,25 +563,31 @@ public class MainActivity extends AppCompatActivity implements CallReceiver.Call
             return; 
         }
         
-        if (text.toLowerCase().contains("stop") || text.toLowerCase().contains("বন্ধ")) { 
+        String lowerText = text.toLowerCase();
+        if (lowerText.contains("stop") || lowerText.contains("বন্ধ") || lowerText.contains("থাম")) { 
             stopConversation(); 
             return; 
         }
         
-        mainHandler.post(() -> tvUser.setText("You: " + text));
+        if (tvUser != null) {
+            mainHandler.post(() -> tvUser.setText("You: " + text));
+        }
+        
         sttBengaliBD = true;
         processWithAI(text);
     }
 
     private void processWithAI(String input) {
+        Log.d(TAG, "Processing AI request: " + input);
         updateUIState("thinking");
         
         executor.execute(() -> {
             try {
                 String response = getGroqResponse(input, detectedLanguage);
+                Log.d(TAG, "AI response: " + response);
                 
                 mainHandler.post(() -> {
-                    tvAI.setText("AI: " + response);
+                    if (tvAI != null) tvAI.setText("AI: " + response);
                     setTTSLanguage(detectedLanguage);
                     speak(response);
                 });
@@ -559,10 +595,12 @@ public class MainActivity extends AppCompatActivity implements CallReceiver.Call
             } catch (Exception e) {
                 Log.e(TAG, "AI error: " + e.getMessage());
                 mainHandler.post(() -> {
-                    String errorMsg = detectedLanguage.equals("bn") ? "দুঃখিত, আমি বুঝতে পারিনি। আবার চেষ্টা করুন।" : "Sorry, I didn't understand. Let's try again.";
-                    tvAI.setText("AI: " + errorMsg);
+                    String errorMsg = detectedLanguage.equals("bn") ? "দুঃখিত, সমস্যা হয়েছে। আবার চেষ্টা করুন।" : "Sorry, I encountered an error. Let's try again.";
+                    if (tvAI != null) tvAI.setText("AI: " + errorMsg);
                     speak(errorMsg);
-                    mainHandler.postDelayed(() -> startListening(), 2000);
+                    mainHandler.postDelayed(() -> {
+                        if (isConversationActive && !isSpeaking) startListening();
+                    }, 2000);
                 });
             }
         });
@@ -574,7 +612,7 @@ public class MainActivity extends AppCompatActivity implements CallReceiver.Call
         
         String systemPrompt;
         if (lang.equals("bn")) {
-            systemPrompt = "আপনি একজন বন্ধুসুলভ ফোন সহকারী। আপনার উত্তরগুলো সংক্ষিপ্ত, স্বাভাবিক এবং বাংলায় হবে।";
+            systemPrompt = "আপনি একজন বন্ধুসুলভ ফোন সহকারী। উত্তর দিন সংক্ষেপে।";
         } else {
             systemPrompt = "You are a friendly phone assistant. Keep responses short, conversational, and helpful.";
         }
@@ -583,8 +621,8 @@ public class MainActivity extends AppCompatActivity implements CallReceiver.Call
             conn.setRequestMethod("POST");
             conn.setRequestProperty("Authorization", "Bearer " + GROQ_API_KEY);
             conn.setRequestProperty("Content-Type", "application/json");
-            conn.setConnectTimeout(10000);
-            conn.setReadTimeout(15000);
+            conn.setConnectTimeout(15000);
+            conn.setReadTimeout(20000);
             conn.setDoOutput(true);
             
             String jsonBody = "{\"model\":\"llama-3.1-8b-instant\"," +
@@ -595,7 +633,11 @@ public class MainActivity extends AppCompatActivity implements CallReceiver.Call
             conn.getOutputStream().write(jsonBody.getBytes());
             
             int responseCode = conn.getResponseCode();
-            if (responseCode != 200) throw new Exception("API error: " + responseCode);
+            Log.d(TAG, "API response code: " + responseCode);
+            
+            if (responseCode != 200) {
+                throw new Exception("API error: " + responseCode);
+            }
             
             BufferedReader reader = new BufferedReader(new InputStreamReader(conn.getInputStream()));
             StringBuilder response = new StringBuilder();
@@ -612,8 +654,13 @@ public class MainActivity extends AppCompatActivity implements CallReceiver.Call
     }
 
     private void speak(String text) {
+        Log.d(TAG, "speak called: " + text);
+        
         if (textToSpeech == null || !isTTSReady) {
-            if (isConversationActive) mainHandler.postDelayed(() -> startListening(), 500);
+            Log.e(TAG, "TTS not ready");
+            if (isConversationActive) {
+                mainHandler.postDelayed(() -> startListening(), 500);
+            }
             return;
         }
         
@@ -621,8 +668,11 @@ public class MainActivity extends AppCompatActivity implements CallReceiver.Call
             isSpeaking = true;
             updateUIState("speaking");
             
+            Bundle params = new Bundle();
+            params.putString(TextToSpeech.Engine.KEY_PARAM_UTTERANCE_ID, "utterance");
+            
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                textToSpeech.speak(text, TextToSpeech.QUEUE_FLUSH, null, "utterance");
+                textToSpeech.speak(text, TextToSpeech.QUEUE_FLUSH, params, "utterance");
             } else {
                 textToSpeech.speak(text, TextToSpeech.QUEUE_FLUSH, null);
             }
@@ -635,20 +685,29 @@ public class MainActivity extends AppCompatActivity implements CallReceiver.Call
 
     private void requestAudioFocus() {
         try {
+            if (audioManager == null) {
+                audioManager = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
+            }
             audioManager.setMode(AudioManager.MODE_IN_COMMUNICATION);
             audioManager.requestAudioFocus(null, AudioManager.STREAM_VOICE_CALL, AudioManager.AUDIOFOCUS_GAIN_TRANSIENT);
-        } catch (Exception e) { Log.e(TAG, "Audio focus error: " + e.getMessage()); }
+        } catch (Exception e) { 
+            Log.e(TAG, "Audio focus error: " + e.getMessage()); 
+        }
     }
 
     private void retryOrRecover() {
         if (isConversationActive) {
             sttBengaliBD = true;
-            mainHandler.postDelayed(() -> startListening(), 1000);
+            mainHandler.postDelayed(() -> {
+                if (isConversationActive && !isSpeaking) startListening();
+            }, 1000);
         }
     }
 
     private void updateUIState(String state) {
         try {
+            if (isDestroyed) return;
+            
             int bgColor;
             String statusText;
             
@@ -659,11 +718,9 @@ public class MainActivity extends AppCompatActivity implements CallReceiver.Call
                     break;
                 case "speaking":
                     bgColor = 0xFF2196F3; statusText = "Speaking...";
-                    startSpeakingAnimation();
                     break;
                 case "thinking":
                     bgColor = 0xFFFF9800; statusText = "Thinking...";
-                    startThinkingAnimation();
                     break;
                 case "starting":
                     bgColor = 0xFF9C27B0; statusText = "Starting...";
@@ -676,40 +733,29 @@ public class MainActivity extends AppCompatActivity implements CallReceiver.Call
             if (circleView != null) circleView.setBackgroundColor(bgColor);
             if (tvStatus != null) tvStatus.setText(statusText);
             
-        } catch (Exception e) { Log.e(TAG, "UI error: " + e.getMessage()); }
+        } catch (Exception e) { 
+            Log.e(TAG, "UI error: " + e.getMessage()); 
+        }
     }
 
     private void startListeningAnimation() {
         try {
             if (circleView != null) {
-                Animation scale = AnimationUtils.loadAnimation(this, android.R.anim.fade_in);
-                circleView.startAnimation(scale);
+                Animation fadeIn = new AlphaAnimation(0.0f, 1.0f);
+                fadeIn.setDuration(300);
+                circleView.startAnimation(fadeIn);
             }
-        } catch (Exception e) { Log.e(TAG, "Animation error: " + e.getMessage()); }
-    }
-
-    private void startSpeakingAnimation() {
-        try {
-            if (circleView != null) {
-                Animation blink = AnimationUtils.loadAnimation(this, android.R.anim.fade_in);
-                circleView.startAnimation(blink);
-            }
-        } catch (Exception e) { Log.e(TAG, "Animation error: " + e.getMessage()); }
-    }
-
-    private void startThinkingAnimation() {
-        try {
-            if (circleView != null) {
-                Animation rotate = AnimationUtils.loadAnimation(this, android.R.anim.fade_in);
-                circleView.startAnimation(rotate);
-            }
-        } catch (Exception e) { Log.e(TAG, "Animation error: " + e.getMessage()); }
+        } catch (Exception e) { 
+            Log.e(TAG, "Animation error: " + e.getMessage()); 
+        }
     }
 
     private void stopAnimations() {
         try {
             if (circleView != null) circleView.clearAnimation();
-        } catch (Exception e) { Log.e(TAG, "Stop animation error: " + e.getMessage()); }
+        } catch (Exception e) { 
+            Log.e(TAG, "Stop animation error: " + e.getMessage()); 
+        }
     }
     
     // ============== Call Notification System ==============
@@ -729,11 +775,9 @@ public class MainActivity extends AppCompatActivity implements CallReceiver.Call
     }
     
     private void showCallNotification(String phoneNumber) {
+        Log.d(TAG, "Showing notification for: " + phoneNumber);
         incomingCallNumber = phoneNumber;
         
-        Log.d(TAG, "Showing call notification for: " + phoneNumber);
-        
-        // Intent for Confirm button - use Broadcast
         Intent confirmIntent = new Intent(ACTION_ANSWER);
         confirmIntent.putExtra("phone_number", phoneNumber);
         PendingIntent confirmPendingIntent = PendingIntent.getBroadcast(
@@ -741,7 +785,6 @@ public class MainActivity extends AppCompatActivity implements CallReceiver.Call
             PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
         );
         
-        // Intent for Reject button
         Intent rejectIntent = new Intent(ACTION_REJECT);
         rejectIntent.putExtra("phone_number", phoneNumber);
         PendingIntent rejectPendingIntent = PendingIntent.getBroadcast(
@@ -749,10 +792,10 @@ public class MainActivity extends AppCompatActivity implements CallReceiver.Call
             PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
         );
         
-        // Full screen intent for when screen is locked
         Intent fullScreenIntent = new Intent(this, MainActivity.class);
         fullScreenIntent.setAction(ACTION_ANSWER);
         fullScreenIntent.putExtra("phone_number", phoneNumber);
+        fullScreenIntent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
         PendingIntent fullScreenPendingIntent = PendingIntent.getActivity(
             this, 2, fullScreenIntent,
             PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
@@ -773,18 +816,15 @@ public class MainActivity extends AppCompatActivity implements CallReceiver.Call
             .addAction(R.drawable.ic_mic_white, "❌ REJECT", rejectPendingIntent);
         
         notificationManager.notify(NOTIFICATION_ID, builder.build());
-        Log.d(TAG, "Call notification shown");
     }
     
     private void dismissNotification() {
         notificationManager.cancel(NOTIFICATION_ID);
-        Log.d(TAG, "Notification dismissed");
     }
     
-    // Called when user clicks "CONFIRM" to transfer call to agent
+    // Called when user clicks "CONFIRM"
     private void transferCallToAgent(String phoneNumber) {
         Log.d(TAG, "=== TRANSFER CALL TO AGENT ===");
-        Log.d(TAG, "Phone number: " + phoneNumber);
         
         dismissNotification();
         
@@ -801,7 +841,7 @@ public class MainActivity extends AppCompatActivity implements CallReceiver.Call
         intent.putExtra("phone_number", phoneNumber);
         startActivity(intent);
         
-        // Step 3: Enable speaker and set audio mode
+        // Step 3: Enable speaker and audio mode
         enableSpeakerAndAudioMode();
         
         // Step 4: Request audio focus
@@ -809,56 +849,54 @@ public class MainActivity extends AppCompatActivity implements CallReceiver.Call
         updateUIState("starting");
         
         // Step 5: Greet the caller
-        String greeting = "Hello! This is an AI assistant. How can I help you today?";
-        speak(greeting);
+        speak("Hello! This is an AI assistant. How can I help you?");
         
-        // Step 6: Start listening after greeting
-        mainHandler.postDelayed(() -> {
-            if (isCallActive && !isSpeaking) {
-                startListening();
-            }
-        }, 3000);
+        // Step 6: Start listening (handled by onDone callback)
         
-        Toast.makeText(this, "🤖 AI Agent connected!", Toast.LENGTH_LONG).show();
+        mainHandler.post(() -> 
+            Toast.makeText(this, "🤖 AI Agent connected!", Toast.LENGTH_LONG).show()
+        );
     }
     
-    // Automatically answer the incoming call
+    // Auto-answer with multiple fallback methods
     private void answerCall() {
         Log.d(TAG, "Attempting to answer call...");
         
-        try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+        // Method 1: TelecomManager (requires Android 6.0+ and permission)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            try {
                 TelecomManager telecomManager = (TelecomManager) getSystemService(Context.TELECOM_SERVICE);
-                if (telecomManager != null) {
-                    if (ContextCompat.checkSelfPermission(this, Manifest.permission.ANSWER_PHONE_CALLS) 
-                            == PackageManager.PERMISSION_GRANTED) {
-                        telecomManager.acceptRingingCall();
-                        Log.d(TAG, "Call answered via TelecomManager");
-                        return;
-                    }
+                if (telecomManager != null && ContextCompat.checkSelfPermission(this, Manifest.permission.ANSWER_PHONE_CALLS) 
+                        == PackageManager.PERMISSION_GRANTED) {
+                    telecomManager.acceptRingingCall();
+                    Log.d(TAG, "Call answered via TelecomManager");
+                    return;
                 }
+            } catch (Exception e) {
+                Log.e(TAG, "TelecomManager error: " + e.getMessage());
             }
-        } catch (Exception e) {
-            Log.e(TAG, "TelecomManager answer failed: " + e.getMessage());
         }
         
-        // Try runtime answer
-        tryRuntimeAnswer();
-    }
-    
-    private void tryRuntimeAnswer() {
+        // Method 2: Intent ACTION_ANSWER (deprecated but might work)
+        try {
+            Intent intent = new Intent(Intent.ACTION_ANSWER);
+            intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            startActivity(intent);
+            Log.d(TAG, "Call answered via ACTION_ANSWER");
+        } catch (Exception e) {
+            Log.e(TAG, "ACTION_ANSWER error: " + e.getMessage());
+        }
+        
+        // Method 3: Key event simulation (fallback)
         try {
             Runtime.getRuntime().exec("input keyevent 5");
-            Log.d(TAG, "Call answered via input keyevent");
+            Log.d(TAG, "Call answered via keyevent");
         } catch (Exception e) {
-            Log.e(TAG, "Runtime answer failed: " + e.getMessage());
+            Log.e(TAG, "keyevent error: " + e.getMessage());
         }
     }
     
-    // Enable speaker and configure audio for 2-way conversation
     private void enableSpeakerAndAudioMode() {
-        Log.d(TAG, "Enabling speaker and audio mode...");
-        
         try {
             audioManager.setMode(AudioManager.MODE_IN_COMMUNICATION);
             audioManager.setSpeakerphoneOn(true);
@@ -869,21 +907,19 @@ public class MainActivity extends AppCompatActivity implements CallReceiver.Call
             audioManager.requestAudioFocus(null, AudioManager.STREAM_VOICE_CALL, 
                 AudioManager.AUDIOFOCUS_GAIN_TRANSIENT);
             
-            Log.d(TAG, "Speaker enabled successfully");
+            Log.d(TAG, "Speaker enabled");
         } catch (Exception e) {
-            Log.e(TAG, "Speaker enable error: " + e.getMessage());
+            Log.e(TAG, "Speaker error: " + e.getMessage());
         }
     }
     
     // CallReceiver.CallListener implementation
     @Override
     public void onIncomingCall(String number) {
-        Log.d(TAG, "=== INCOMING CALL DETECTED ===");
+        Log.d(TAG, "=== INCOMING CALL ===");
         Log.d(TAG, "Number: " + number);
         
-        mainHandler.post(() -> {
-            showCallNotification(number);
-        });
+        mainHandler.post(() -> showCallNotification(number));
     }
     
     @Override
@@ -891,15 +927,10 @@ public class MainActivity extends AppCompatActivity implements CallReceiver.Call
         super.onNewIntent(intent);
         handleIntent(intent);
     }
-    
-    @Override
-    protected void onResume() {
-        super.onResume();
-        Log.d(TAG, "App resumed");
-    }
 
     @Override
     protected void onDestroy() {
+        Log.d(TAG, "onDestroy called");
         isDestroyed = true;
         
         try {
@@ -910,10 +941,22 @@ public class MainActivity extends AppCompatActivity implements CallReceiver.Call
         
         try {
             stopConversation();
-            if (speechRecognizer != null) { speechRecognizer.destroy(); speechRecognizer = null; }
-            if (textToSpeech != null) { textToSpeech.stop(); textToSpeech.shutdown(); textToSpeech = null; }
-            if (executor != null) { executor.shutdown(); executor.awaitTermination(1, TimeUnit.SECONDS); }
-        } catch (Exception e) { Log.e(TAG, "Destroy error: " + e.getMessage()); }
+            if (speechRecognizer != null) { 
+                speechRecognizer.destroy(); 
+                speechRecognizer = null; 
+            }
+            if (textToSpeech != null) { 
+                textToSpeech.stop(); 
+                textToSpeech.shutdown(); 
+                textToSpeech = null; 
+            }
+            if (executor != null) { 
+                executor.shutdown(); 
+                executor.awaitTermination(1, TimeUnit.SECONDS); 
+            }
+        } catch (Exception e) { 
+            Log.e(TAG, "Destroy error: " + e.getMessage()); 
+        }
         
         CallReceiver.setListener(null);
         super.onDestroy();
