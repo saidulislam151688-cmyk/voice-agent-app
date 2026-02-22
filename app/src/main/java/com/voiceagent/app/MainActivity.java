@@ -67,7 +67,7 @@ public class MainActivity extends AppCompatActivity {
     // UI Elements
     private Button btnToggle;
     private TextView tvStatus, tvUser, tvAI, tvTitle, tvIcon;
-    private View circleView, pulseView;
+    private View circleView;
 
     // Flags
     private boolean isConversationActive = false;
@@ -98,7 +98,6 @@ public class MainActivity extends AppCompatActivity {
         tvTitle = findViewById(R.id.tvTitle);
         tvIcon = findViewById(R.id.tvIcon);
         circleView = findViewById(R.id.circleView);
-        pulseView = findViewById(R.id.pulseView);
         
         btnToggle.setOnClickListener(v -> toggleConversation());
         updateUIState("idle");
@@ -623,11 +622,6 @@ public class MainActivity extends AppCompatActivity {
                 Animation scale = AnimationUtils.loadAnimation(this, android.R.anim.fade_in);
                 circleView.startAnimation(scale);
             }
-            if (pulseView != null) {
-                Animation pulse = AnimationUtils.loadAnimation(this, android.R.anim.fade_in);
-                pulseView.startAnimation(pulse);
-                pulseView.setAlpha(0.6f);
-            }
         } catch (Exception e) { Log.e(TAG, "Animation error: " + e.getMessage()); }
     }
 
@@ -652,10 +646,6 @@ public class MainActivity extends AppCompatActivity {
     private void stopAnimations() {
         try {
             if (circleView != null) circleView.clearAnimation();
-            if (pulseView != null) {
-                pulseView.clearAnimation();
-                pulseView.setAlpha(0f);
-            }
         } catch (Exception e) { Log.e(TAG, "Stop animation error: " + e.getMessage()); }
     }
 
