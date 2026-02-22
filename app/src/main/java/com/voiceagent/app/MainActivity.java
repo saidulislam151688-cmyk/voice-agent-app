@@ -37,8 +37,8 @@ import java.util.concurrent.CopyOnWriteArrayList;
 public class MainActivity extends AppCompatActivity {
 
     private static final int PERMISSION_CODE = 100;
-    // TODO: Replace with your Groq API key or set via BuildConfig
-    private static final String GROQ_API_KEY = "YOUR_GROQ_API_KEY_HERE";
+    // Replace with your Groq API key
+    private static final String GROQ_API_KEY = "YOUR_GROQ_API_KEY";
 
     // Speech Recognition
     private SpeechRecognizer speechRecognizer;
