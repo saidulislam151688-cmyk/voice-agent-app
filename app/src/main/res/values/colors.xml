@@ -1,7 +1,71 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <!-- Primary Colors - Modern Green Gradient -->
+    <color name="primary">#00C853</color>
+    <color name="primary_variant">#00E676</color>
+    <color name="primary_dark">#00A844</color>
+    <color name="primary_light">#69F0AE</color>
+    
+    <!-- Secondary Colors - Cyan Accent -->
+    <color name="secondary">#00BCD4</color>
+    <color name="secondary_variant">#26C6DA</color>
+    <color name="secondary_light">#80DEEA</color>
+    
+    <!-- Background Colors -->
+    <color name="background_dark">#0D0D1A</color>
+    <color name="background_gradient_start">#1A1A2E</color>
+    <color name="background_gradient_end">#16213E</color>
+    <color name="surface_dark">#1E1E30</color>
+    <color name="surface_elevated">#252540</color>
+    
+    <!-- Glassmorphism Colors -->
+    <color name="glass_white">#1AFFFFFF</color>
+    <color name="glass_border">#2AFFFFFF</color>
+    <color name="glass_card">#0DFFFFFF</color>
+    
+    <!-- Text Colors -->
+    <color name="text_primary">#FFFFFF</color>
+    <color name="text_secondary">#B0B0C0</color>
+    <color name="text_hint">#606080</color>
+    <color name="text_on_primary">#FFFFFF</color>
+    
+    <!-- Accent Colors -->
+    <color name="accent_green">#00E676</color>
+    <color name="accent_blue">#40C4FF</color>
+    <color name="accent_purple">#7C4DFF</color>
+    <color name="accent_orange">#FF6E40</color>
+    <color name="accent_pink">#FF4081</color>
+    
+    <!-- Status Colors -->
+    <color name="status_listening">#00E676</color>
+    <color name="status_speaking">#40C4FF</color>
+    <color name="status_processing">#FFD600</color>
+    <color name="status_error">#FF5252</color>
+    <color name="status_idle">#78909C</color>
+    
+    <!-- Gradient Colors -->
+    <color name="gradient_start">#00C853</color>
+    <color name="gradient_center">#00BCD4</color>
+    <color name="gradient_end">#7C4DFF</color>
+    
+    <!-- Wave/Animation Colors -->
+    <color name="wave_color_1">#3300C853</color>
+    <color name="wave_color_2">#2600BCD4</color>
+    <color name="wave_color_3">#1A7C4DFF</color>
+    
+    <!-- Ripple Colors -->
+    <color name="ripple_color">#4000E676</color>
+    <color name="ripple_light">#80FFFFFF</color>
+    
+    <!-- Card Colors -->
+    <color name="card_background">#15FFFFFF</color>
+    <color name="card_border">#25FFFFFF</color>
+    
+    <!-- Black and White -->
     <color name="black">#FF000000</color>
     <color name="white">#FFFFFFFF</color>
-    <color name="ic_launcher_background">#4CAF50</color>
+    
+    <!-- Launcher Colors -->
+    <color name="ic_launcher_background">#00C853</color>
     <color name="ic_launcher_foreground">#FFFFFF</color>
 </resources>

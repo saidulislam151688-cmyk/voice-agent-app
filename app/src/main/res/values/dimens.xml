@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Spacing -->
+    <dimen name="spacing_xs">4dp</dimen>
+    <dimen name="spacing_sm">8dp</dimen>
+    <dimen name="spacing_md">16dp</dimen>
+    <dimen name="spacing_lg">24dp</dimen>
+    <dimen name="spacing_xl">32dp</dimen>
+    <dimen name="spacing_xxl">48dp</dimen>
+    
+    <!-- Corner Radius -->
+    <dimen name="radius_sm">8dp</dimen>
+    <dimen name="radius_md">16dp</dimen>
+    <dimen name="radius_lg">24dp</dimen>
+    <dimen name="radius_xl">32dp</dimen>
+    <dimen name="radius_circle">50dp</dimen>
+    
+    <!-- Icon Sizes -->
+    <dimen name="icon_sm">24dp</dimen>
+    <dimen name="icon_md">36dp</dimen>
+    <dimen name="icon_lg">48dp</dimen>
+    <dimen name="icon_xl">64dp</dimen>
+    <dimen name="icon_xxl">96dp</dimen>
+    
+    <!-- Button Sizes -->
+    <dimen name="button_height_sm">40dp</dimen>
+    <dimen name="button_height_md">56dp</dimen>
+    <dimen name="button_height_lg">72dp</dimen>
+    
+    <!-- FAB Sizes -->
+    <dimen name="fab_size">56dp</dimen>
+    <dimen name="fab_size_large">72dp</dimen>
+    
+    <!-- Mic Button -->
+    <dimen name="mic_button_size">160dp</dimen>
+    <dimen name="mic_icon_size">70dp</dimen>
+    <dimen name="ripple_size">220dp</dimen>
+    
+    <!-- Card -->
+    <dimen name="card_elevation">8dp</dimen>
+    <dimen name="card_corner_radius">28dp</dimen>
+    <dimen name="card_padding">24dp</dimen>
+    
+    <!-- Text Sizes -->
+    <dimen name="text_xs">10sp</dimen>
+    <dimen name="text_sm">12sp</dimen>
+    <dimen name="text_md">14sp</dimen>
+    <dimen name="text_lg">16sp</dimen>
+    <dimen name="text_xl">20sp</dimen>
+    <dimen name="text_xxl">28sp</dimen>
+    <dimen name="text_title">36sp</dimen>
+    
+    <!-- Animation Sizes -->
+    <dimen name="wave_size_sm">200dp</dimen>
+    <dimen name="wave_size_md">250dp</dimen>
+    <dimen name="wave_size_lg">300dp</dimen>
+    <dimen name="sound_bar_width">6dp</dimen>
+    <dimen name="sound_bar_height_min">20dp</dimen>
+    <dimen name="sound_bar_height_max">50dp</dimen>
+    
+    <!-- Logo -->
+    <dimen name="logo_size">100dp</dimen>
+    <dimen name="logo_icon_size">60dp</dimen>
+</resources>
