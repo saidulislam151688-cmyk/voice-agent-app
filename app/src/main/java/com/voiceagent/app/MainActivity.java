@@ -378,8 +378,9 @@ public class MainActivity extends AppCompatActivity implements CallReceiver.Call
                 }
             }
             
+            final boolean granted = allGranted;
             mainHandler.post(() -> {
-                if (allGranted) {
+                if (granted) {
                     Toast.makeText(this, "✅ All permissions granted!", Toast.LENGTH_SHORT).show();
                 } else {
                     Toast.makeText(this, "⚠️ Some permissions denied", Toast.LENGTH_LONG).show();
