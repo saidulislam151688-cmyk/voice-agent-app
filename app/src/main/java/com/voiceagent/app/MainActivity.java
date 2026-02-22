@@ -18,7 +18,6 @@ import android.util.Log;
 import android.view.View;
 import android.view.animation.Animation;
 import android.view.animation.AnimationUtils;
-import android.widget.Button;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -26,6 +25,8 @@ import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
+
+import com.google.android.material.floatingactionbutton.FloatingActionButton;
 
 import org.json.JSONObject;
 
@@ -65,7 +66,7 @@ public class MainActivity extends AppCompatActivity {
     private String[] supportedLanguages = {"en", "bn"};
 
     // UI Elements
-    private Button btnToggle;
+    private FloatingActionButton btnToggle;
     private TextView tvStatus, tvUser, tvAI, tvTitle, tvIcon;
     private View circleView;
 
@@ -346,7 +347,7 @@ public class MainActivity extends AppCompatActivity {
         
         requestAudioFocus();
         updateUIState("starting");
-        btnToggle.setText("🛑 STOP");
+        btnToggle.setImageResource(android.R.drawable.ic_media_pause);
         
         // Start with greeting
         speak("Hello! I'm your voice assistant. What would you like to talk about?");
@@ -372,7 +373,7 @@ public class MainActivity extends AppCompatActivity {
         isSpeaking = false;
         
         mainHandler.post(() -> {
-            btnToggle.setText("🎙️ START");
+            btnToggle.setImageResource(android.R.drawable.ic_btn_speak_now);
             tvStatus.setText("Tap to start");
             tvUser.setText("You: ...");
             tvAI.setText("AI: ...");
