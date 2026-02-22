@@ -18,6 +18,7 @@ import android.util.Log;
 import android.view.View;
 import android.view.animation.Animation;
 import android.view.animation.AnimationUtils;
+import android.widget.ImageView;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -67,7 +68,8 @@ public class MainActivity extends AppCompatActivity {
 
     // UI Elements
     private FloatingActionButton btnToggle;
-    private TextView tvStatus, tvUser, tvAI, tvTitle, tvIcon;
+    private TextView tvStatus, tvUser, tvAI, tvTitle;
+    private ImageView tvIcon;
     private View circleView;
 
     // Flags
@@ -587,31 +589,30 @@ public class MainActivity extends AppCompatActivity {
     private void updateUIState(String state) {
         try {
             int bgColor;
-            String icon, statusText;
+            String statusText;
             
             switch (state) {
                 case "listening":
-                    bgColor = 0xFF4CAF50; icon = "🎤"; statusText = "Listening...";
+                    bgColor = 0xFF4CAF50; statusText = "Listening...";
                     startListeningAnimation();
                     break;
                 case "speaking":
-                    bgColor = 0xFF2196F3; icon = "🔊"; statusText = "Speaking...";
+                    bgColor = 0xFF2196F3; statusText = "Speaking...";
                     startSpeakingAnimation();
                     break;
                 case "thinking":
-                    bgColor = 0xFFFF9800; icon = "💭"; statusText = "Thinking...";
+                    bgColor = 0xFFFF9800; statusText = "Thinking...";
                     startThinkingAnimation();
                     break;
                 case "starting":
-                    bgColor = 0xFF9C27B0; icon = "⚡"; statusText = "Starting...";
+                    bgColor = 0xFF9C27B0; statusText = "Starting...";
                     break;
                 default:
-                    bgColor = 0xFF1A1A2E; icon = "🎙️"; statusText = "Tap to start";
+                    bgColor = 0xFF1A1A2E; statusText = "Tap to start";
                     stopAnimations();
             }
             
             if (circleView != null) circleView.setBackgroundColor(bgColor);
-            if (tvIcon != null) tvIcon.setText(icon);
             if (tvStatus != null) tvStatus.setText(statusText);
             
         } catch (Exception e) { Log.e(TAG, "UI error: " + e.getMessage()); }
