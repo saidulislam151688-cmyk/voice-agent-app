@@ -1,26 +1,22 @@
 package com.voiceagent.app;
 
 import android.Manifest;
-import android.app.NotificationChannel;
-import android.app.NotificationManager;
-import android.app.PendingIntent;
-import android.content.BroadcastReceiver;
+import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
-import android.content.IntentFilter;
+import android.content.ServiceConnection;
 import android.content.pm.PackageManager;
 import android.media.AudioManager;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
+import android.os.IBinder;
 import android.os.Looper;
-import android.provider.Settings;
 import android.speech.RecognitionListener;
 import android.speech.RecognizerIntent;
 import android.speech.SpeechRecognizer;
 import android.speech.tts.TextToSpeech;
 import android.speech.tts.UtteranceProgressListener;
-import android.telecom.TelecomManager;
 import android.util.Log;
 import android.view.View;
 import android.view.animation.AlphaAnimation;
@@ -32,7 +28,6 @@ import android.widget.Toast;
 import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.app.ActivityCompat;
-import androidx.core.app.NotificationCompat;
 import androidx.core.content.ContextCompat;
 
 import com.google.android.material.floatingactionbutton.FloatingActionButton;
@@ -49,15 +44,13 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
-public class MainActivity extends AppCompatActivity implements CallReceiver.CallListener {
+public class MainActivity extends AppCompatActivity {
 
     private static final String TAG = "VoiceAgent";
     private static final int PERMISSION_CODE = 100;
-    private static final int ANSWER_CALL_CODE = 101;
-    private static final String CHANNEL_ID = "voice_agent_call_channel";
-    private static final int NOTIFICATION_ID = 1001;
     private static final String ACTION_ANSWER = "com.voiceagent.app.ACTION_ANSWER";
     private static final String ACTION_REJECT = "com.voiceagent.app.ACTION_REJECT";
+    public static final String ACTION_TRANSFER_CALL = "com.voiceagent.app.TRANSFER_CALL";
     
     // API Key - will be replaced by GitHub Actions
     private static final String GROQ_API_KEY = "YOUR_GROQ_API_KEY";
@@ -91,8 +84,22 @@ public class MainActivity extends AppCompatActivity implements CallReceiver.Call
     // Call handling
     private String incomingCallNumber = null;
     private boolean isCallActive = false;
-    private NotificationManager notificationManager;
-    private BroadcastReceiver notificationActionReceiver;
+    private CallMonitorService callService;
+    private boolean serviceBound = false;
+
+    private final ServiceConnection serviceConnection = new ServiceConnection() {
+        @Override
+        public void onServiceConnected(ComponentName name, IBinder service) {
+            Log.d(TAG, "Service connected");
+            serviceBound = true;
+        }
+
+        @Override
+        public void onServiceDisconnected(ComponentName name) {
+            Log.d(TAG, "Service disconnected");
+            serviceBound = false;
+        }
+    };
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -101,11 +108,29 @@ public class MainActivity extends AppCompatActivity implements CallReceiver.Call
         
         Log.d(TAG, "=== Voice Agent Starting ===");
         
-        notificationManager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
-        createNotificationChannel();
-        registerNotificationActions();
+        // Bind to CallMonitorService
+        Intent serviceIntent = new Intent(this, CallMonitorService.class);
+        startService(serviceIntent);
+        bindService(serviceIntent, serviceConnection, Context.BIND_AUTO_CREATE);
         
-        CallReceiver.setListener(this);
+        // Set up call listener
+        CallMonitorService.listener = new CallMonitorService.CallListener() {
+            @Override
+            public void onIncomingCall(String number) {
+                Log.d(TAG, "Incoming call: " + number);
+            }
+
+            @Override
+            public void onCallAnswered() {
+                Log.d(TAG, "Call answered");
+            }
+
+            @Override
+            public void onCallEnded() {
+                Log.d(TAG, "Call ended");
+                mainHandler.post(() -> stopConversation());
+            }
+        };
         
         initViews();
         initAudioManager();
@@ -123,44 +148,14 @@ public class MainActivity extends AppCompatActivity implements CallReceiver.Call
         if (intent != null) {
             String action = intent.getAction();
             String phoneNumber = intent.getStringExtra("phone_number");
+            
             Log.d(TAG, "handleIntent action: " + action + ", number: " + phoneNumber);
             
-            if (ACTION_ANSWER.equals(action)) {
+            if (ACTION_TRANSFER_CALL.equals(action) || ACTION_ANSWER.equals(action)) {
                 transferCallToAgent(phoneNumber);
             } else if (ACTION_REJECT.equals(action)) {
-                dismissNotification();
+                // Handle reject
             }
-        }
-    }
-    
-    private void registerNotificationActions() {
-        notificationActionReceiver = new BroadcastReceiver() {
-            @Override
-            public void onReceive(Context context, Intent intent) {
-                String action = intent.getAction();
-                String phoneNumber = intent.getStringExtra("phone_number");
-                Log.d(TAG, "Notification action: " + action);
-                
-                if (ACTION_ANSWER.equals(action)) {
-                    transferCallToAgent(phoneNumber);
-                } else if (ACTION_REJECT.equals(action)) {
-                    dismissNotification();
-                }
-            }
-        };
-        
-        IntentFilter filter = new IntentFilter();
-        filter.addAction(ACTION_ANSWER);
-        filter.addAction(ACTION_REJECT);
-        
-        try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                registerReceiver(notificationActionReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
-            } else {
-                registerReceiver(notificationActionReceiver, filter);
-            }
-        } catch (Exception e) {
-            Log.e(TAG, "Register receiver error: " + e.getMessage());
         }
     }
 
@@ -174,7 +169,7 @@ public class MainActivity extends AppCompatActivity implements CallReceiver.Call
         circleView = findViewById(R.id.circleView);
         
         btnToggle.setOnClickListener(v -> {
-            Log.d(TAG, "Button clicked, isConversationActive: " + isConversationActive);
+            Log.d(TAG, "Button clicked");
             toggleConversation();
         });
         
@@ -208,14 +203,13 @@ public class MainActivity extends AppCompatActivity implements CallReceiver.Call
 
                 @Override
                 public void onError(int error) {
-                    Log.e(TAG, "Speech error: " + error + " (Bengali BD: " + sttBengaliBD + ")");
+                    Log.e(TAG, "Speech error: " + error);
                     isListening = false;
                     
-                    // Try Bengali first, then English, then retry
-                    if ((error == 7 || error == 8) && sttBengaliBD) { // NO_MATCH or TIMEOUT
+                    if ((error == 7 || error == 8) && sttBengaliBD) {
                         sttBengaliBD = false;
                         mainHandler.postDelayed(() -> {
-                            if (isConversationActive && !isSpeaking) startListeningBengaliGeneric();
+                            if (isConversationActive && !isSpeaking) startListeningBengali();
                         }, 300);
                         return;
                     }
@@ -289,7 +283,7 @@ public class MainActivity extends AppCompatActivity implements CallReceiver.Call
                             updateUIState("idle");
                             if (isConversationActive) {
                                 mainHandler.postDelayed(() -> {
-                                    if (isConversationActive && !isSpeaking) {
+                                    if (isConversationActive && !isSpeaking && !isListening) {
                                         startListening();
                                     }
                                 }, 1000);
@@ -299,13 +293,13 @@ public class MainActivity extends AppCompatActivity implements CallReceiver.Call
 
                     @Override
                     public void onError(String utteranceId) {
-                        Log.e(TAG, "TTS error: " + utteranceId);
+                        Log.e(TAG, "TTS error");
                         isSpeaking = false;
                         mainHandler.post(() -> {
                             updateUIState("idle");
                             if (isConversationActive) {
                                 mainHandler.postDelayed(() -> {
-                                    if (isConversationActive && !isSpeaking) {
+                                    if (isConversationActive && !isSpeaking && !isListening) {
                                         startListening();
                                     }
                                 }, 1000);
@@ -362,7 +356,15 @@ public class MainActivity extends AppCompatActivity implements CallReceiver.Call
         if (!permissionsNeeded.isEmpty()) {
             String[] permissions = permissionsNeeded.toArray(new String[0]);
             ActivityCompat.requestPermissions(this, permissions, PERMISSION_CODE);
+        } else {
+            startCallService();
         }
+    }
+
+    private void startCallService() {
+        Intent serviceIntent = new Intent(this, CallMonitorService.class);
+        serviceIntent.setAction(CallMonitorService.ACTION_START_SERVICE);
+        startService(serviceIntent);
     }
 
     @Override
@@ -382,20 +384,15 @@ public class MainActivity extends AppCompatActivity implements CallReceiver.Call
             mainHandler.post(() -> {
                 if (granted) {
                     Toast.makeText(this, "✅ All permissions granted!", Toast.LENGTH_SHORT).show();
+                    startCallService();
                 } else {
-                    Toast.makeText(this, "⚠️ Some permissions denied", Toast.LENGTH_LONG).show();
+                    Toast.makeText(this, "⚠️ Permissions needed for call features", Toast.LENGTH_LONG).show();
                 }
             });
-        } else if (requestCode == ANSWER_CALL_CODE) {
-            if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-                answerCall();
-            }
         }
     }
 
     private void toggleConversation() {
-        Log.d(TAG, "toggleConversation called, active: " + isConversationActive);
-        
         if (isConversationActive) {
             stopConversation();
         } else {
@@ -404,22 +401,10 @@ public class MainActivity extends AppCompatActivity implements CallReceiver.Call
     }
 
     private void startConversation() {
-        Log.d(TAG, "startConversation called");
+        if (isConversationActive) return;
         
-        if (isConversationActive) {
-            Log.d(TAG, "Already active, returning");
-            return;
-        }
-        
-        if (!isTTSReady) {
-            Log.e(TAG, "TTS not ready");
-            mainHandler.post(() -> Toast.makeText(this, "Please wait... TTS initializing", Toast.LENGTH_SHORT).show());
-            return;
-        }
-        
-        if (!isRecognitionReady) {
-            Log.e(TAG, "Recognition not ready");
-            mainHandler.post(() -> Toast.makeText(this, "Please wait... Speech initializing", Toast.LENGTH_SHORT).show());
+        if (!isTTSReady || !isRecognitionReady) {
+            mainHandler.post(() -> Toast.makeText(this, "Please wait... initializing", Toast.LENGTH_SHORT).show());
             return;
         }
         
@@ -427,31 +412,21 @@ public class MainActivity extends AppCompatActivity implements CallReceiver.Call
         detectedLanguage = "en";
         sttBengaliBD = true;
         
-        Log.d(TAG, "Setting audio mode and requesting focus");
         requestAudioFocus();
         updateUIState("starting");
         
-        Log.d(TAG, "Speaking greeting");
         speak("Hello! I'm your voice assistant. How can I help you today?");
-        
-        // Start listening after greeting (handled by onDone callback in speak)
     }
 
     private void stopConversation() {
-        Log.d(TAG, "stopConversation called");
-        
         if (!isConversationActive) return;
         
         isConversationActive = false;
         isCallActive = false;
         
         try {
-            if (speechRecognizer != null) {
-                try { speechRecognizer.stopListening(); } catch (Exception e) {}
-            }
-            if (textToSpeech != null) {
-                try { textToSpeech.stop(); } catch (Exception e) {}
-            }
+            if (speechRecognizer != null) speechRecognizer.stopListening();
+            if (textToSpeech != null) textToSpeech.stop();
             if (audioManager != null) {
                 audioManager.setMode(AudioManager.MODE_NORMAL);
                 audioManager.setSpeakerphoneOn(false);
@@ -469,22 +444,12 @@ public class MainActivity extends AppCompatActivity implements CallReceiver.Call
             if (tvUser != null) tvUser.setText("You: ...");
             if (tvAI != null) tvAI.setText("AI: ...");
             updateUIState("idle");
-            stopAnimations();
         });
     }
 
     private void startListening() {
-        Log.d(TAG, "startListening called, active: " + isConversationActive + ", speaking: " + isSpeaking);
-        
-        if (isDestroyed || !isConversationActive || isSpeaking || isListening) {
-            Log.d(TAG, "Cannot start listening, returning");
-            return;
-        }
-        
-        if (speechRecognizer == null) {
-            Log.e(TAG, "Speech recognizer is null");
-            return;
-        }
+        if (isDestroyed || !isConversationActive || isSpeaking || isListening) return;
+        if (speechRecognizer == null) return;
         
         sttBengaliBD = true;
         
@@ -532,7 +497,7 @@ public class MainActivity extends AppCompatActivity implements CallReceiver.Call
         }
     }
     
-    private void startListeningBengaliGeneric() {
+    private void startListeningBengali() {
         if (isDestroyed || !isConversationActive || isSpeaking || isListening) return;
         if (speechRecognizer == null) return;
         
@@ -551,7 +516,7 @@ public class MainActivity extends AppCompatActivity implements CallReceiver.Call
             Log.d(TAG, "Started listening (Bengali)");
             
         } catch (Exception e) {
-            Log.e(TAG, "Error starting Bengali generic: " + e.getMessage());
+            Log.e(TAG, "Error starting Bengali: " + e.getMessage());
             retryOrRecover();
         }
     }
@@ -578,13 +543,11 @@ public class MainActivity extends AppCompatActivity implements CallReceiver.Call
     }
 
     private void processWithAI(String input) {
-        Log.d(TAG, "Processing AI request: " + input);
         updateUIState("thinking");
         
         executor.execute(() -> {
             try {
                 String response = getGroqResponse(input, detectedLanguage);
-                Log.d(TAG, "AI response: " + response);
                 
                 mainHandler.post(() -> {
                     if (tvAI != null) tvAI.setText("AI: " + response);
@@ -595,7 +558,7 @@ public class MainActivity extends AppCompatActivity implements CallReceiver.Call
             } catch (Exception e) {
                 Log.e(TAG, "AI error: " + e.getMessage());
                 mainHandler.post(() -> {
-                    String errorMsg = detectedLanguage.equals("bn") ? "দুঃখিত, সমস্যা হয়েছে। আবার চেষ্টা করুন।" : "Sorry, I encountered an error. Let's try again.";
+                    String errorMsg = detectedLanguage.equals("bn") ? "দুঃখিত, সমস্যা হয়েছে।" : "Sorry, I encountered an error.";
                     if (tvAI != null) tvAI.setText("AI: " + errorMsg);
                     speak(errorMsg);
                     mainHandler.postDelayed(() -> {
@@ -633,11 +596,7 @@ public class MainActivity extends AppCompatActivity implements CallReceiver.Call
             conn.getOutputStream().write(jsonBody.getBytes());
             
             int responseCode = conn.getResponseCode();
-            Log.d(TAG, "API response code: " + responseCode);
-            
-            if (responseCode != 200) {
-                throw new Exception("API error: " + responseCode);
-            }
+            if (responseCode != 200) throw new Exception("API error: " + responseCode);
             
             BufferedReader reader = new BufferedReader(new InputStreamReader(conn.getInputStream()));
             StringBuilder response = new StringBuilder();
@@ -654,15 +613,7 @@ public class MainActivity extends AppCompatActivity implements CallReceiver.Call
     }
 
     private void speak(String text) {
-        Log.d(TAG, "speak called: " + text);
-        
-        if (textToSpeech == null || !isTTSReady) {
-            Log.e(TAG, "TTS not ready");
-            if (isConversationActive) {
-                mainHandler.postDelayed(() -> startListening(), 500);
-            }
-            return;
-        }
+        if (textToSpeech == null || !isTTSReady) return;
         
         try {
             isSpeaking = true;
@@ -699,7 +650,9 @@ public class MainActivity extends AppCompatActivity implements CallReceiver.Call
         if (isConversationActive) {
             sttBengaliBD = true;
             mainHandler.postDelayed(() -> {
-                if (isConversationActive && !isSpeaking) startListening();
+                if (isConversationActive && !isSpeaking && !isListening) {
+                    startListening();
+                }
             }, 1000);
         }
     }
@@ -714,7 +667,6 @@ public class MainActivity extends AppCompatActivity implements CallReceiver.Call
             switch (state) {
                 case "listening":
                     bgColor = 0xFF4CAF50; statusText = "Listening...";
-                    startListeningAnimation();
                     break;
                 case "speaking":
                     bgColor = 0xFF2196F3; statusText = "Speaking...";
@@ -727,7 +679,6 @@ public class MainActivity extends AppCompatActivity implements CallReceiver.Call
                     break;
                 default:
                     bgColor = 0xFF1A1A2E; statusText = "Tap to start";
-                    stopAnimations();
             }
             
             if (circleView != null) circleView.setBackgroundColor(bgColor);
@@ -737,166 +688,34 @@ public class MainActivity extends AppCompatActivity implements CallReceiver.Call
             Log.e(TAG, "UI error: " + e.getMessage()); 
         }
     }
-
-    private void startListeningAnimation() {
-        try {
-            if (circleView != null) {
-                Animation fadeIn = new AlphaAnimation(0.0f, 1.0f);
-                fadeIn.setDuration(300);
-                circleView.startAnimation(fadeIn);
-            }
-        } catch (Exception e) { 
-            Log.e(TAG, "Animation error: " + e.getMessage()); 
-        }
-    }
-
-    private void stopAnimations() {
-        try {
-            if (circleView != null) circleView.clearAnimation();
-        } catch (Exception e) { 
-            Log.e(TAG, "Stop animation error: " + e.getMessage()); 
-        }
-    }
     
-    // ============== Call Notification System ==============
-    
-    private void createNotificationChannel() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            NotificationChannel channel = new NotificationChannel(
-                CHANNEL_ID,
-                "Voice Agent Call",
-                NotificationManager.IMPORTANCE_HIGH
-            );
-            channel.setDescription("Notification for incoming calls");
-            channel.enableVibration(true);
-            channel.setVibrationPattern(new long[]{0, 500, 200, 500});
-            notificationManager.createNotificationChannel(channel);
-        }
-    }
-    
-    private void showCallNotification(String phoneNumber) {
-        Log.d(TAG, "Showing notification for: " + phoneNumber);
-        incomingCallNumber = phoneNumber;
-        
-        Intent confirmIntent = new Intent(ACTION_ANSWER);
-        confirmIntent.putExtra("phone_number", phoneNumber);
-        PendingIntent confirmPendingIntent = PendingIntent.getBroadcast(
-            this, 0, confirmIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
-        );
-        
-        Intent rejectIntent = new Intent(ACTION_REJECT);
-        rejectIntent.putExtra("phone_number", phoneNumber);
-        PendingIntent rejectPendingIntent = PendingIntent.getBroadcast(
-            this, 1, rejectIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
-        );
-        
-        Intent fullScreenIntent = new Intent(this, MainActivity.class);
-        fullScreenIntent.setAction(ACTION_ANSWER);
-        fullScreenIntent.putExtra("phone_number", phoneNumber);
-        fullScreenIntent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
-        PendingIntent fullScreenPendingIntent = PendingIntent.getActivity(
-            this, 2, fullScreenIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
-        );
-        
-        NotificationCompat.Builder builder = new NotificationCompat.Builder(this, CHANNEL_ID)
-            .setSmallIcon(R.drawable.ic_mic_white)
-            .setContentTitle("📞 Incoming Call")
-            .setContentText("Call from: " + phoneNumber)
-            .setPriority(NotificationCompat.PRIORITY_HIGH)
-            .setCategory(NotificationCompat.CATEGORY_CALL)
-            .setAutoCancel(false)
-            .setOngoing(true)
-            .setVibrate(new long[]{0, 500, 200, 500})
-            .setFullScreenIntent(fullScreenPendingIntent, true)
-            .setContentIntent(fullScreenPendingIntent)
-            .addAction(R.drawable.ic_mic_white, "✅ CONFIRM", confirmPendingIntent)
-            .addAction(R.drawable.ic_mic_white, "❌ REJECT", rejectPendingIntent);
-        
-        notificationManager.notify(NOTIFICATION_ID, builder.build());
-    }
-    
-    private void dismissNotification() {
-        notificationManager.cancel(NOTIFICATION_ID);
-    }
-    
-    // Called when user clicks "CONFIRM"
     private void transferCallToAgent(String phoneNumber) {
         Log.d(TAG, "=== TRANSFER CALL TO AGENT ===");
-        
-        dismissNotification();
         
         isCallActive = true;
         isConversationActive = true;
         detectedLanguage = "en";
         
-        // Step 1: Answer the call
-        answerCall();
+        enableFullAudioMode();
         
-        // Step 2: Bring app to foreground
         Intent intent = new Intent(this, MainActivity.class);
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
-        intent.putExtra("phone_number", phoneNumber);
         startActivity(intent);
         
-        // Step 3: Enable speaker and audio mode
-        enableSpeakerAndAudioMode();
-        
-        // Step 4: Request audio focus
-        requestAudioFocus();
-        updateUIState("starting");
-        
-        // Step 5: Greet the caller
         speak("Hello! This is an AI assistant. How can I help you?");
         
-        // Step 6: Start listening (handled by onDone callback)
+        mainHandler.postDelayed(() -> {
+            if (isConversationActive && !isSpeaking) {
+                startListening();
+            }
+        }, 3000);
         
         mainHandler.post(() -> 
             Toast.makeText(this, "🤖 AI Agent connected!", Toast.LENGTH_LONG).show()
         );
     }
     
-    // Auto-answer with multiple fallback methods
-    private void answerCall() {
-        Log.d(TAG, "Attempting to answer call...");
-        
-        // Method 1: TelecomManager (requires Android 6.0+ and permission)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            try {
-                TelecomManager telecomManager = (TelecomManager) getSystemService(Context.TELECOM_SERVICE);
-                if (telecomManager != null && ContextCompat.checkSelfPermission(this, Manifest.permission.ANSWER_PHONE_CALLS) 
-                        == PackageManager.PERMISSION_GRANTED) {
-                    telecomManager.acceptRingingCall();
-                    Log.d(TAG, "Call answered via TelecomManager");
-                    return;
-                }
-            } catch (Exception e) {
-                Log.e(TAG, "TelecomManager error: " + e.getMessage());
-            }
-        }
-        
-        // Method 2: Intent ACTION_ANSWER (deprecated but might work)
-        try {
-            Intent intent = new Intent(Intent.ACTION_ANSWER);
-            intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-            startActivity(intent);
-            Log.d(TAG, "Call answered via ACTION_ANSWER");
-        } catch (Exception e) {
-            Log.e(TAG, "ACTION_ANSWER error: " + e.getMessage());
-        }
-        
-        // Method 3: Key event simulation (fallback)
-        try {
-            Runtime.getRuntime().exec("input keyevent 5");
-            Log.d(TAG, "Call answered via keyevent");
-        } catch (Exception e) {
-            Log.e(TAG, "keyevent error: " + e.getMessage());
-        }
-    }
-    
-    private void enableSpeakerAndAudioMode() {
+    private void enableFullAudioMode() {
         try {
             audioManager.setMode(AudioManager.MODE_IN_COMMUNICATION);
             audioManager.setSpeakerphoneOn(true);
@@ -907,19 +726,10 @@ public class MainActivity extends AppCompatActivity implements CallReceiver.Call
             audioManager.requestAudioFocus(null, AudioManager.STREAM_VOICE_CALL, 
                 AudioManager.AUDIOFOCUS_GAIN_TRANSIENT);
             
-            Log.d(TAG, "Speaker enabled");
+            Log.d(TAG, "Full audio mode enabled");
         } catch (Exception e) {
-            Log.e(TAG, "Speaker error: " + e.getMessage());
+            Log.e(TAG, "Audio mode error: " + e.getMessage());
         }
-    }
-    
-    // CallReceiver.CallListener implementation
-    @Override
-    public void onIncomingCall(String number) {
-        Log.d(TAG, "=== INCOMING CALL ===");
-        Log.d(TAG, "Number: " + number);
-        
-        mainHandler.post(() -> showCallNotification(number));
     }
     
     @Override
@@ -934,8 +744,9 @@ public class MainActivity extends AppCompatActivity implements CallReceiver.Call
         isDestroyed = true;
         
         try {
-            if (notificationActionReceiver != null) {
-                unregisterReceiver(notificationActionReceiver);
+            if (serviceBound) {
+                unbindService(serviceConnection);
+                serviceBound = false;
             }
         } catch (Exception e) {}
         
@@ -958,7 +769,7 @@ public class MainActivity extends AppCompatActivity implements CallReceiver.Call
             Log.e(TAG, "Destroy error: " + e.getMessage()); 
         }
         
-        CallReceiver.setListener(null);
+        CallMonitorService.listener = null;
         super.onDestroy();
     }
 }

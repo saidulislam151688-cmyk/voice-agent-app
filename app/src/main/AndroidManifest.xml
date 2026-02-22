@@ -12,6 +12,7 @@
     <uses-permission android:name="android.permission.CALL_PHONE"/>
     <uses-permission android:name="android.permission.VIBRATE"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_PHONE_CALL"/>
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
 
     <application
@@ -32,10 +33,29 @@
             </intent-filter>
         </activity>
 
+        <!-- Call Monitor Service -->
+        <service
+            android:name=".CallMonitorService"
+            android:enabled="true"
+            android:exported="false"
+            android:foregroundServiceType="phoneCall"/>
+
+        <!-- Call Action Receiver -->
+        <receiver
+            android:name=".CallActionReceiver"
+            android:enabled="true"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.voiceagent.app.ACTION_ANSWER"/>
+                <action android:name="com.voiceagent.app.ACTION_REJECT"/>
+            </intent-filter>
+        </receiver>
+
+        <!-- Old Call Receiver (for backward compatibility) -->
         <receiver
             android:name=".CallReceiver"
-            android:exported="true"
-            android:permission="android.permission.READ_PHONE_STATE">
+            android:enabled="true"
+            android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.PHONE_STATE"/>
             </intent-filter>
