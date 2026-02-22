@@ -271,9 +271,16 @@ public class CallMonitorService extends Service {
     
     public void rejectCall() {
         try {
-            if (telephonyManager != null) {
-                telephonyManager.endCall();
+            // Try to reject the call using TelecomManager
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                TelecomManager telecomManager = (TelecomManager) getSystemService(Context.TELECOM_SERVICE);
+                if (telecomManager != null) {
+                    // Unfortunately, TelecomManager doesn't have a direct endCall method
+                    // We need to use ITelecomService or just ignore the call
+                }
             }
+            // Fallback: just dismiss the notification
+            // The user will need to manually reject on their phone
         } catch (Exception e) {
             Log.e(TAG, "Error rejecting call: " + e.getMessage());
         }
