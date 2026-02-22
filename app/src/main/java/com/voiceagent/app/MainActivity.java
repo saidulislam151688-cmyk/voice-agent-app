@@ -459,32 +459,6 @@ public class MainActivity extends AppCompatActivity {
             retryOrRecover();
         }
     }
-    }
-    }
-    
-    private void startListeningEnglish() {
-        if (isDestroyed || !isConversationActive || isSpeaking) return;
-        if (speechRecognizer == null) return;
-        
-        try {
-            Intent intent = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
-            intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
-            intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, "en-US");
-            intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, "en-US");
-            intent.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true);
-            intent.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3);
-            
-            isListening = true;
-            updateUIState("listening");
-            
-            speechRecognizer.startListening(intent);
-            Log.d(TAG, "Started listening (English mode)");
-            
-        } catch (Exception e) {
-            Log.e(TAG, "Error starting English listening: " + e.getMessage());
-            retryOrRecover();
-        }
-    }
 
     private void handleUserInput(String text) {
         if (text == null || text.trim().isEmpty()) { 
