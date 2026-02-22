@@ -48,7 +48,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
-public class MainActivity extends AppCompatActivity {
+public class MainActivity extends AppCompatActivity implements CallReceiver.CallListener {
 
     private static final String TAG = "VoiceAgent";
     private static final int PERMISSION_CODE = 100;

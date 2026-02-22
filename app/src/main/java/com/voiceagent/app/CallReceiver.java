@@ -26,7 +26,7 @@ public class CallReceiver extends BroadcastReceiver {
         String action = intent.getAction();
         Log.d(TAG, "Received action: " + action);
 
-        if (Intent.ACTION_PHONE_STATE.equals(action)) {
+        if ("android.intent.action.PHONE_STATE".equals(action)) {
             String state = intent.getStringExtra(TelephonyManager.EXTRA_STATE);
             Log.d(TAG, "Phone state: " + state);
             
