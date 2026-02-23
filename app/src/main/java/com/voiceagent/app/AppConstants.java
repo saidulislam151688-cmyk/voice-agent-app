@@ -73,6 +73,7 @@ public class AppConstants {
     public static final String LANGUAGE_ENGLISH = "en";
     public static final String LANGUAGE_BENGALI = "bn";
     public static final String LANGUAGE_BENGALI_BD = "bn-BD";
+    public static final String LANGUAGE_AUTO = "auto";
     
     // TTS
     public static final String TTS_UTTERANCE_ID = "voice_agent_utterance";

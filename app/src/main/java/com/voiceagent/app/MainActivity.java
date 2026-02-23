@@ -783,20 +783,24 @@ public class MainActivity extends AppCompatActivity {
     }
     
     private void registerAudioRoutingListener() {
-        if (audioManager != null) {
-            audioRoutingListener = new AudioManager.OnAudioRoutingChangedListener() {
-                @Override
-                public void onAudioRoutingChanged(AudioManager audioManager) {
-                    AppLogger.d("Audio routing changed: " + audioManager.getMode());
-                    handleAudioRoutingChange();
-                }
-            };
-            audioManager.registerAudioRoutingChangedListener(audioRoutingListener);
+        if (audioManager != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            try {
+                audioRoutingListener = new AudioManager.OnAudioRoutingChangedListener() {
+                    @Override
+                    public void onAudioRoutingChanged(AudioManager audioManager) {
+                        AppLogger.d("Audio routing changed: " + audioManager.getMode());
+                        handleAudioRoutingChange();
+                    }
+                };
+                audioManager.registerAudioRoutingChangedListener(audioRoutingListener);
+            } catch (Exception e) {
+                AppLogger.e("Error registering audio routing listener", e);
+            }
         }
     }
     
     private void unregisterAudioRoutingListener() {
-        if (audioManager != null && audioRoutingListener != null) {
+        if (audioManager != null && audioRoutingListener != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             try {
                 audioManager.unregisterAudioRoutingChangedListener(audioRoutingListener);
             } catch (Exception e) {
