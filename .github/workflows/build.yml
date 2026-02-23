@@ -25,8 +25,10 @@ jobs:
 
       - name: Inject API Key
         run: |
-          # Write API key to local.properties
+          # Create local.properties with API key
+          echo "sdk.dir=/root/android-sdk" > local.properties
           echo "groqApiKey=${{ secrets.GROQ_API_KEY }}" >> local.properties
+          cat local.properties
 
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
