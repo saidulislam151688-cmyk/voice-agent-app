@@ -1192,6 +1192,7 @@ public class MainActivity extends AppCompatActivity {
             if (serviceBound) {
                 unbindService(serviceConnection);
                 serviceBound = false;
+            }
         } catch (Exception e) {
             AppLogger.e("Error unbinding service", e);
         }
