@@ -96,7 +96,7 @@ public class MainActivity extends AppCompatActivity {
     private int retryCount = 0;
     private static final int MAX_RETRIES = 3;
     
-    private AudioManager.OnAudioRoutingChangedListener audioRoutingListener;
+
     
     private final ServiceConnection serviceConnection = new ServiceConnection() {
         @Override
@@ -303,11 +303,10 @@ public class MainActivity extends AppCompatActivity {
                 if (telecomManager != null) {
                     if (ContextCompat.checkSelfPermission(this, Manifest.permission.ANSWER_PHONE_CALLS) 
                             == PackageManager.PERMISSION_GRANTED) {
-                        if (telecomManager.isRinging()) {
-                            telecomManager.acceptRingingCall();
-                            AppLogger.d("Call answered via TelecomManager");
-                            return true;
-                        }
+                        // isRinging() requires API 31+, just try to accept directly
+                        telecomManager.acceptRingingCall();
+                        AppLogger.d("Call answered via TelecomManager");
+                        return true;
                     }
                 }
             }
@@ -783,30 +782,12 @@ public class MainActivity extends AppCompatActivity {
     }
     
     private void registerAudioRoutingListener() {
-        if (audioManager != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            try {
-                audioRoutingListener = new AudioManager.OnAudioRoutingChangedListener() {
-                    @Override
-                    public void onAudioRoutingChanged(AudioManager audioManager) {
-                        AppLogger.d("Audio routing changed: " + audioManager.getMode());
-                        handleAudioRoutingChange();
-                    }
-                };
-                audioManager.registerAudioRoutingChangedListener(audioRoutingListener);
-            } catch (Exception e) {
-                AppLogger.e("Error registering audio routing listener", e);
-            }
-        }
+        // Audio routing change detection requires API 31+
+        // For now, we'll skip this and rely on manual speaker control
     }
     
     private void unregisterAudioRoutingListener() {
-        if (audioManager != null && audioRoutingListener != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            try {
-                audioManager.unregisterAudioRoutingChangedListener(audioRoutingListener);
-            } catch (Exception e) {
-                AppLogger.e("Error unregistering audio listener", e);
-            }
-        }
+        // No-op for now
     }
     
     private void handleAudioRoutingChange() {

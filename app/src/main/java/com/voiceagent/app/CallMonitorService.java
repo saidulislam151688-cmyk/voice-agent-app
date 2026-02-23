@@ -308,17 +308,16 @@ public class CallMonitorService extends Service {
                 if (telecomManager != null) {
                     if (ContextCompat.checkSelfPermission(this, android.Manifest.permission.ANSWER_PHONE_CALLS) 
                             == PackageManager.PERMISSION_GRANTED) {
-                        if (telecomManager.isRinging()) {
-                            telecomManager.acceptRingingCall();
-                            AppLogger.d("Call answered via TelecomManager");
-                            
-                            mainHandler.postDelayed(() -> {
-                                if (listener != null) {
-                                    listener.onCallAnswered();
-                                }
-                            }, 500);
-                            return true;
-                        }
+                        // isRinging() requires API 31+, just try to accept directly
+                        telecomManager.acceptRingingCall();
+                        AppLogger.d("Call answered via TelecomManager");
+                        
+                        mainHandler.postDelayed(() -> {
+                            if (listener != null) {
+                                listener.onCallAnswered();
+                            }
+                        }, 500);
+                        return true;
                     }
                 }
             }
