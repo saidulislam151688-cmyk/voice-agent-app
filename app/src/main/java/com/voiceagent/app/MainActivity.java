@@ -117,22 +117,34 @@ public class MainActivity extends AppCompatActivity {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
         
-        AppLogger.init(this);
-        AppLogger.d("=== Voice Agent Starting ===");
+        try {
+            AppLogger.init(this);
+            AppLogger.d("=== Voice Agent Starting ===");
+        } catch (Exception e) {
+            Log.e(TAG, "Logger init failed: " + e.getMessage());
+        }
         
-        audioManager = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
-        initHandler();
+        try {
+            audioManager = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
+            initHandler();
+            initViews();
+            checkPermissions();
+        } catch (Exception e) {
+            Log.e(TAG, "Initialization error: " + e.getMessage());
+        }
         
-        initViews();
-        checkPermissions();
+        try {
+            executor = Executors.newSingleThreadExecutor();
+            handleIntent(getIntent());
+            loadPreferences();
+            checkApiKey();
+        } catch (Exception e) {
+            Log.e(TAG, "Post-init error: " + e.getMessage());
+        }
         
-        executor = Executors.newSingleThreadExecutor();
-        handleIntent(getIntent());
-        
-        loadPreferences();
-        checkApiKey();
-        
-        AppLogger.d("Voice Agent started");
+        try {
+            AppLogger.d("Voice Agent started");
+        } catch (Exception e) {}
     }
     
     private void initHandler() {
@@ -142,30 +154,42 @@ public class MainActivity extends AppCompatActivity {
     }
     
     private void loadPreferences() {
-        SharedPreferences prefs = getSharedPreferences(AppConstants.PREF_NAME, Context.MODE_PRIVATE);
-        preferredLanguage = prefs.getString(AppConstants.PREF_LANGUAGE, AppConstants.LANGUAGE_AUTO);
-        AppLogger.d("Loaded preferred language: " + preferredLanguage);
+        try {
+            SharedPreferences prefs = getSharedPreferences(AppConstants.PREF_NAME, Context.MODE_PRIVATE);
+            preferredLanguage = prefs.getString(AppConstants.PREF_LANGUAGE, AppConstants.LANGUAGE_AUTO);
+            Log.d(TAG, "Loaded preferred language: " + preferredLanguage);
+        } catch (Exception e) {
+            Log.e(TAG, "Error loading preferences: " + e.getMessage());
+            preferredLanguage = AppConstants.LANGUAGE_AUTO;
+        }
     }
     
     private void checkApiKey() {
-        String apiKey = getApiKey();
-        if (apiKey == null || apiKey.isEmpty() || apiKey.equals("YOUR_GROQ_API_KEY")) {
+        try {
+            String apiKey = getApiKey();
+            if (apiKey == null || apiKey.isEmpty() || apiKey.equals("YOUR_GROQ_API_KEY") || apiKey.length() < 10) {
+                isApiKeyValid = false;
+                Log.w(TAG, "API key not configured or invalid");
+            } else {
+                isApiKeyValid = true;
+                Log.d(TAG, "API key is configured");
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "Error checking API key: " + e.getMessage());
             isApiKeyValid = false;
-            AppLogger.w("API key not configured");
-            runOnUiThread(() -> showApiKeyDialog());
-        } else {
-            isApiKeyValid = true;
-            AppLogger.d("API key is configured");
         }
     }
     
     private String getApiKey() {
         try {
-            return BuildConfig.GROQ_API_KEY;
+            String key = BuildConfig.GROQ_API_KEY;
+            if (key != null && !key.isEmpty() && !key.equals("YOUR_GROQ_API_KEY")) {
+                return key;
+            }
         } catch (Exception e) {
-            AppLogger.e("Error getting API key", e);
-            return "YOUR_GROQ_API_KEY";
+            Log.e(TAG, "Error getting API key from BuildConfig: " + e.getMessage());
         }
+        return "";
     }
     
     private void showApiKeyDialog() {
