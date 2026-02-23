@@ -2,6 +2,18 @@ plugins {
     id 'com.android.application'
 }
 
+// Read API key from local.properties or environment
+def getGroqApiKey = { ->
+    def props = new Properties()
+    def localProperties = file("local.properties")
+    if (localProperties.exists()) {
+        localProperties.withInputStream { props.load(it) }
+    }
+    return props.getProperty("groqApiKey") ?: System.getenv("GROQ_API_KEY") ?: ""
+}
+
+def groqApiKey = getGroqApiKey()
+
 android {
     namespace 'com.voiceagent.app'
     compileSdk 34
@@ -10,13 +22,22 @@ android {
         applicationId "com.voiceagent_app"
         minSdk 26
         targetSdk 34
-        versionCode 1
-        versionName "1.0"
+        versionCode 13
+        versionName "1.3"
+        
+        // API Key from local.properties or environment
+        buildConfigField "String", "GROQ_API_KEY", "\"${groqApiKey}\""
     }
 
     buildTypes {
         release {
+            minifyEnabled true
+            shrinkResources true
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+        debug {
             minifyEnabled false
+            applicationIdSuffix ".debug"
         }
     }
 
@@ -62,4 +83,12 @@ dependencies {
     
     // OkHttp for networking
     implementation 'com.squareup.okhttp3:okhttp:4.12.0'
+    
+    // WorkManager for reliable background tasks
+    implementation 'androidx.work:work-runtime:2.9.0'
+    
+    // Lifecycle components
+    implementation 'androidx.lifecycle:lifecycle-runtime:2.7.0'
+    implementation 'androidx.lifecycle:lifecycle-viewmodel:2.7.0'
+    implementation 'androidx.lifecycle:lifecycle-livedata:2.7.0'
 }

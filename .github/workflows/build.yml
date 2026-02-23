@@ -25,10 +25,8 @@ jobs:
 
       - name: Inject API Key
         run: |
-          # Replace placeholder with secret API key
-          sed -i 's/YOUR_GROQ_API_KEY/${{ secrets.GROQ_API_KEY }}/g' app/src/main/java/com/voiceagent/app/MainActivity.java
-        env:
-          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          # Write API key to local.properties
+          echo "groqApiKey=${{ secrets.GROQ_API_KEY }}" >> local.properties
 
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew

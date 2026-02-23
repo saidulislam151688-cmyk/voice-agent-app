@@ -18,7 +18,6 @@ import android.os.Looper;
 import android.telecom.TelecomManager;
 import android.telephony.PhoneStateListener;
 import android.telephony.TelephonyManager;
-import android.util.Log;
 
 import androidx.annotation.Nullable;
 import androidx.core.app.NotificationCompat;
@@ -27,14 +26,6 @@ import androidx.core.content.ContextCompat;
 public class CallMonitorService extends Service {
 
     private static final String TAG = "CallMonitorService";
-    private static final String CHANNEL_ID = "voice_agent_call_channel";
-    private static final int NOTIFICATION_ID = 1001;
-    private static final int FOREGROUND_NOTIFICATION_ID = 1002;
-    
-    public static String ACTION_ANSWER = "com.voiceagent.app.ACTION_ANSWER";
-    public static String ACTION_REJECT = "com.voiceagent.app.ACTION_REJECT";
-    public static String ACTION_START = "com.voiceagent.app.START";
-    public static String ACTION_STOP = "com.voiceagent.app.STOP";
     
     public static CallListener listener;
     public static CallAnswerListener answerListener;
@@ -60,25 +51,30 @@ public class CallMonitorService extends Service {
     @Override
     public void onCreate() {
         super.onCreate();
-        Log.d(TAG, "Service created");
+        AppLogger.init(this);
+        AppLogger.d("Service created");
         
         audioManager = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
-        createNotificationChannel();
+        createNotificationChannels();
         
         registerAnswerReceiver();
     }
     
     private void registerAnswerReceiver() {
-        IntentFilter filter = new IntentFilter(ACTION_ANSWER);
-        registerReceiver(answerReceiver, filter);
+        IntentFilter filter = new IntentFilter(AppConstants.ACTION_ANSWER);
+        try {
+            registerReceiver(answerReceiver, filter);
+        } catch (Exception e) {
+            AppLogger.e("Error registering receiver", e);
+        }
     }
     
     private final BroadcastReceiver answerReceiver = new BroadcastReceiver() {
         @Override
         public void onReceive(Context context, Intent intent) {
-            if (ACTION_ANSWER.equals(intent.getAction())) {
-                String number = intent.getStringExtra("phone_number");
-                Log.d(TAG, "Received answer action for: " + number);
+            if (AppConstants.ACTION_ANSWER.equals(intent.getAction())) {
+                String number = intent.getStringExtra(AppConstants.EXTRA_PHONE_NUMBER);
+                AppLogger.d("Received answer action for: " + number);
                 answerCall();
             }
         }
@@ -86,24 +82,24 @@ public class CallMonitorService extends Service {
     
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
-        Log.d(TAG, "onStartCommand called");
+        AppLogger.d("onStartCommand called");
         
         if (intent != null) {
             String action = intent.getAction();
-            Log.d(TAG, "Action: " + action);
+            AppLogger.d("Action: " + action);
             
-            if (ACTION_STOP.equals(action)) {
+            if (AppConstants.ACTION_STOP.equals(action)) {
                 stopSelf();
                 return START_NOT_STICKY;
             }
             
-            if (ACTION_ANSWER.equals(action)) {
-                String number = intent.getStringExtra("phone_number");
+            if (AppConstants.ACTION_ANSWER.equals(action)) {
+                String number = intent.getStringExtra(AppConstants.EXTRA_PHONE_NUMBER);
                 answerCall();
             }
         }
         
-        startForeground(FOREGROUND_NOTIFICATION_ID, createForegroundNotification());
+        startForeground(AppConstants.NOTIFICATION_ID_FOREGROUND, createForegroundNotification());
         startCallMonitoring();
         
         return START_STICKY;
@@ -111,14 +107,14 @@ public class CallMonitorService extends Service {
     
     private void startCallMonitoring() {
         if (isListeningForCalls) {
-            Log.d(TAG, "Already listening for calls");
+            AppLogger.d("Already listening for calls");
             return;
         }
         
         try {
             if (ContextCompat.checkSelfPermission(this, android.Manifest.permission.READ_PHONE_STATE) 
                     != PackageManager.PERMISSION_GRANTED) {
-                Log.e(TAG, "READ_PHONE_STATE permission not granted");
+                AppLogger.e("READ_PHONE_STATE permission not granted");
                 return;
             }
             
@@ -129,11 +125,11 @@ public class CallMonitorService extends Service {
                     @Override
                     public void onCallStateChanged(int state, String phoneNumber) {
                         super.onCallStateChanged(state, phoneNumber);
-                        Log.d(TAG, "Call state: " + state + ", number: " + phoneNumber);
+                        AppLogger.d("Call state: " + state + ", number: " + phoneNumber);
                         
                         switch (state) {
                             case TelephonyManager.CALL_STATE_RINGING:
-                                Log.d(TAG, "=== CALL RINGING ===");
+                                AppLogger.d("=== CALL RINGING ===");
                                 currentCallNumber = phoneNumber != null ? phoneNumber : "Unknown";
                                 showIncomingCallNotification(currentCallNumber);
                                 if (listener != null) {
@@ -142,14 +138,14 @@ public class CallMonitorService extends Service {
                                 break;
                                 
                             case TelephonyManager.CALL_STATE_OFFHOOK:
-                                Log.d(TAG, "=== CALL OFFHOOK (ANSWERED) ===");
+                                AppLogger.d("=== CALL OFFHOOK (ANSWERED) ===");
                                 if (listener != null) {
                                     listener.onCallAnswered();
                                 }
                                 break;
                                 
                             case TelephonyManager.CALL_STATE_IDLE:
-                                Log.d(TAG, "=== CALL IDLE ===");
+                                AppLogger.d("=== CALL IDLE ===");
                                 dismissCallNotification();
                                 currentCallNumber = null;
                                 if (listener != null) {
@@ -162,35 +158,45 @@ public class CallMonitorService extends Service {
                 
                 telephonyManager.listen(phoneStateListener, PhoneStateListener.LISTEN_CALL_STATE);
                 isListeningForCalls = true;
-                Log.d(TAG, "Started listening for calls");
+                AppLogger.d("Started listening for calls");
             }
         } catch (Exception e) {
-            Log.e(TAG, "Error starting call monitoring: " + e.getMessage());
-            e.printStackTrace();
+            AppLogger.e("Error starting call monitoring", e);
         }
     }
     
-    private void createNotificationChannel() {
+    private void createNotificationChannels() {
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                NotificationChannel channel = new NotificationChannel(
-                    CHANNEL_ID,
-                    "Voice Agent Calls",
+                NotificationManager manager = getSystemService(NotificationManager.class);
+                if (manager == null) return;
+                
+                // Call notification channel
+                NotificationChannel callChannel = new NotificationChannel(
+                    AppConstants.CHANNEL_ID_CALLS,
+                    getString(R.string.notification_channel_calls),
                     NotificationManager.IMPORTANCE_HIGH
                 );
-                channel.setDescription("Incoming call notifications");
-                channel.enableVibration(true);
-                channel.setVibrationPattern(new long[]{0, 500, 200, 500});
-                channel.setShowBadge(true);
-                channel.setLockscreenVisibility(Notification.VISIBILITY_PUBLIC);
+                callChannel.setDescription("Incoming call notifications");
+                callChannel.enableVibration(true);
+                callChannel.setVibrationPattern(new long[]{0, 500, 200, 500});
+                callChannel.setShowBadge(true);
+                callChannel.setLockscreenVisibility(Notification.VISIBILITY_PUBLIC);
+                manager.createNotificationChannel(callChannel);
                 
-                NotificationManager manager = getSystemService(NotificationManager.class);
-                if (manager != null) {
-                    manager.createNotificationChannel(channel);
-                }
+                // Error notification channel
+                NotificationChannel errorChannel = new NotificationChannel(
+                    AppConstants.CHANNEL_ID_ERRORS,
+                    getString(R.string.notification_channel_errors),
+                    NotificationManager.IMPORTANCE_DEFAULT
+                );
+                errorChannel.setDescription("Error notifications");
+                manager.createNotificationChannel(errorChannel);
+                
+                AppLogger.d("Notification channels created");
             }
         } catch (Exception e) {
-            Log.e(TAG, "Error creating notification channel: " + e.getMessage());
+            AppLogger.e("Error creating notification channels", e);
         }
     }
     
@@ -202,10 +208,10 @@ public class CallMonitorService extends Service {
             PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
         );
         
-        return new NotificationCompat.Builder(this, CHANNEL_ID)
+        return new NotificationCompat.Builder(this, AppConstants.CHANNEL_ID_CALLS)
             .setSmallIcon(R.drawable.ic_mic_white)
-            .setContentTitle("Voice Agent")
-            .setContentText("Monitoring calls...")
+            .setContentTitle(getString(R.string.app_name))
+            .setContentText(getString(R.string.notification_monitoring))
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setOngoing(true)
             .setContentIntent(mainPendingIntent)
@@ -213,7 +219,7 @@ public class CallMonitorService extends Service {
     }
     
     private void showIncomingCallNotification(String phoneNumber) {
-        Log.d(TAG, "Showing incoming call notification for: " + phoneNumber);
+        AppLogger.d("Showing incoming call notification for: " + phoneNumber);
         
         Intent mainIntent = new Intent(this, MainActivity.class);
         mainIntent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
@@ -223,41 +229,43 @@ public class CallMonitorService extends Service {
         );
         
         Intent answerIntent = new Intent(this, CallMonitorService.class);
-        answerIntent.setAction(ACTION_ANSWER);
-        answerIntent.putExtra("phone_number", phoneNumber);
+        answerIntent.setAction(AppConstants.ACTION_ANSWER);
+        answerIntent.putExtra(AppConstants.EXTRA_PHONE_NUMBER, phoneNumber);
         PendingIntent answerPendingIntent = PendingIntent.getService(
             this, 1, answerIntent,
             PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
         );
         
         Intent dismissIntent = new Intent(this, MainActivity.class);
-        dismissIntent.setAction(ACTION_REJECT);
-        dismissIntent.putExtra("phone_number", phoneNumber);
+        dismissIntent.setAction(AppConstants.ACTION_REJECT);
+        dismissIntent.putExtra(AppConstants.EXTRA_PHONE_NUMBER, phoneNumber);
         PendingIntent dismissPendingIntent = PendingIntent.getActivity(
             this, 2, dismissIntent,
             PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
         );
         
-        NotificationCompat.Builder builder = new NotificationCompat.Builder(this, CHANNEL_ID)
+        String notificationText = getString(R.string.from_number, phoneNumber);
+        
+        NotificationCompat.Builder builder = new NotificationCompat.Builder(this, AppConstants.CHANNEL_ID_CALLS)
             .setSmallIcon(R.drawable.ic_mic_white)
-            .setContentTitle("Incoming Call")
-            .setContentText("From: " + phoneNumber)
-            .setStyle(new NotificationCompat.BigTextStyle().bigText("From: " + phoneNumber + "\nTap CONFIRM to transfer to AI"))
+            .setContentTitle(getString(R.string.incoming_call))
+            .setContentText(notificationText)
+            .setStyle(new NotificationCompat.BigTextStyle().bigText(notificationText + "\n" + getString(R.string.call_transferring)))
             .setPriority(NotificationCompat.PRIORITY_MAX)
             .setCategory(NotificationCompat.CATEGORY_CALL)
             .setAutoCancel(true)
             .setVibrate(new long[]{0, 500, 200, 500})
             .setContentIntent(mainPendingIntent)
             .setFullScreenIntent(mainPendingIntent, true)
-            .addAction(R.drawable.ic_mic_white, "CONFIRM", answerPendingIntent)
-            .addAction(R.drawable.ic_mic_white, "DISMISS", dismissPendingIntent);
+            .addAction(R.drawable.ic_mic_white, getString(R.string.notification_action_answer), answerPendingIntent)
+            .addAction(R.drawable.ic_mic_white, getString(R.string.notification_action_dismiss), dismissPendingIntent);
         
         NotificationManager manager = getSystemService(NotificationManager.class);
         if (manager != null) {
-            manager.notify(NOTIFICATION_ID, builder.build());
-            Log.d(TAG, "Notification shown successfully");
+            manager.notify(AppConstants.NOTIFICATION_ID_INCOMING_CALL, builder.build());
+            AppLogger.d("Notification shown successfully");
         } else {
-            Log.e(TAG, "NotificationManager is null");
+            AppLogger.e("NotificationManager is null");
         }
     }
     
@@ -265,57 +273,83 @@ public class CallMonitorService extends Service {
         try {
             NotificationManager manager = getSystemService(NotificationManager.class);
             if (manager != null) {
-                manager.cancel(NOTIFICATION_ID);
+                manager.cancel(AppConstants.NOTIFICATION_ID_INCOMING_CALL);
             }
         } catch (Exception e) {
-            Log.e(TAG, "Error dismissing notification: " + e.getMessage());
+            AppLogger.e("Error dismissing notification", e);
         }
     }
     
     public void answerCall() {
-        Log.d(TAG, "Attempting to answer call...");
+        AppLogger.d("Attempting to answer call...");
         
         if (answerListener != null) {
             answerListener.onAnswerRequested(currentCallNumber);
         }
         
+        // Try TelecomManager first
+        boolean answered = tryAnswerWithTelecomManager();
+        
+        if (!answered) {
+            // Fallback to ACTION_ANSWER
+            answered = tryAnswerWithActionAnswer();
+        }
+        
+        if (!answered) {
+            // Final fallback to keyevent
+            answered = tryAnswerWithKeyEvent();
+        }
+    }
+    
+    private boolean tryAnswerWithTelecomManager() {
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                 TelecomManager telecomManager = (TelecomManager) getSystemService(Context.TELECOM_SERVICE);
                 if (telecomManager != null) {
                     if (ContextCompat.checkSelfPermission(this, android.Manifest.permission.ANSWER_PHONE_CALLS) 
                             == PackageManager.PERMISSION_GRANTED) {
-                        telecomManager.acceptRingingCall();
-                        Log.d(TAG, "Call answered via TelecomManager");
-                        
-                        mainHandler.postDelayed(() -> {
-                            if (listener != null) {
-                                listener.onCallAnswered();
-                            }
-                        }, 500);
-                        return;
+                        if (telecomManager.isRinging()) {
+                            telecomManager.acceptRingingCall();
+                            AppLogger.d("Call answered via TelecomManager");
+                            
+                            mainHandler.postDelayed(() -> {
+                                if (listener != null) {
+                                    listener.onCallAnswered();
+                                }
+                            }, 500);
+                            return true;
+                        }
                     }
                 }
             }
         } catch (Exception e) {
-            Log.e(TAG, "TelecomManager error: " + e.getMessage());
+            AppLogger.e("TelecomManager error", e);
         }
-        
+        return false;
+    }
+    
+    private boolean tryAnswerWithActionAnswer() {
         try {
             Intent intent = new Intent(Intent.ACTION_ANSWER);
             intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
             startActivity(intent);
-            Log.d(TAG, "Call answered via ACTION_ANSWER");
+            AppLogger.d("Call answered via ACTION_ANSWER");
+            return true;
         } catch (Exception e) {
-            Log.e(TAG, "ACTION_ANSWER error: " + e.getMessage());
-            
-            try {
-                Runtime.getRuntime().exec("input keyevent 5");
-                Log.d(TAG, "Call answered via keyevent");
-            } catch (Exception ex) {
-                Log.e(TAG, "keyevent error: " + ex.getMessage());
-            }
+            AppLogger.e("ACTION_ANSWER error", e);
         }
+        return false;
+    }
+    
+    private boolean tryAnswerWithKeyEvent() {
+        try {
+            Runtime.getRuntime().exec("input keyevent 5");
+            AppLogger.d("Call answered via keyevent");
+            return true;
+        } catch (Exception e) {
+            AppLogger.e("keyevent error", e);
+        }
+        return false;
     }
     
     public void enableSpeakerMode() {
@@ -333,9 +367,9 @@ public class CallMonitorService extends Service {
             audioManager.requestAudioFocus(null, AudioManager.STREAM_VOICE_CALL, 
                 AudioManager.AUDIOFOCUS_GAIN_TRANSIENT);
             
-            Log.d(TAG, "Speaker enabled successfully");
+            AppLogger.d("Speaker enabled successfully");
         } catch (Exception e) {
-            Log.e(TAG, "Speaker error: " + e.getMessage());
+            AppLogger.e("Speaker error", e);
         }
     }
     
@@ -346,7 +380,7 @@ public class CallMonitorService extends Service {
                 audioManager.setMode(AudioManager.MODE_NORMAL);
             }
         } catch (Exception e) {
-            Log.e(TAG, "Disable speaker error: " + e.getMessage());
+            AppLogger.e("Disable speaker error", e);
         }
     }
     
@@ -358,17 +392,19 @@ public class CallMonitorService extends Service {
     
     @Override
     public void onDestroy() {
-        Log.d(TAG, "Service destroyed");
+        AppLogger.d("Service destroyed");
         
         try {
             unregisterReceiver(answerReceiver);
-        } catch (Exception e) {}
+        } catch (Exception e) {
+            AppLogger.e("Error unregistering receiver", e);
+        }
         
         if (telephonyManager != null && phoneStateListener != null && isListeningForCalls) {
             try {
                 telephonyManager.listen(phoneStateListener, PhoneStateListener.LISTEN_NONE);
             } catch (Exception e) {
-                Log.e(TAG, "Error stopping listener: " + e.getMessage());
+                AppLogger.e("Error stopping listener", e);
             }
             isListeningForCalls = false;
         }

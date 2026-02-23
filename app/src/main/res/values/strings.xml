@@ -1,4 +1,105 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Voice Agent</string>
+    
+    <!-- Main Screen -->
+    <string name="title_voice_agent">Voice Agent</string>
+    <string name="status_tap_to_start">Tap to start</string>
+    <string name="status_listening">Listening...</string>
+    <string name="status_speaking">Speaking...</string>
+    <string name="status_thinking">Thinking...</string>
+    <string name="status_starting">Starting...</string>
+    <string name="status_connected">Connected</string>
+    <string name="status_error">Error occurred</string>
+    <string name="status_offline">Offline</string>
+    
+    <!-- Chat -->
+    <string name="chat_user_label">You:</string>
+    <string name="chat_ai_label">AI:</string>
+    <string name="chat_user_placeholder">You: ...</string>
+    <string name="chat_ai_placeholder">AI: ...</string>
+    
+    <!-- Greetings -->
+    <string name="greeting_en">Hello! I\'m your voice assistant. How can I help you?</string>
+    <string name="greeting_bn">হ্যালো! আমি আপনার ভয়েস সহকারী। আমি কিভাবে আপনাকে সাহায্য করতে পারি?</string>
+    <string name="greeting_call_en">Hello! This is an AI assistant. How can I help you?</string>
+    <string name="greeting_call_bn">হ্যালো! আমি একটি AI সহকারী। আমি কিভাবে আপনাকে সাহায্য করতে পারি?</string>
+    
+    <!-- Call -->
+    <string name="incoming_call">Incoming Call</string>
+    <string name="from_number">From: %s</string>
+    <string name="unknown_number">Unknown Number</string>
+    <string name="call_answered">Call answered</string>
+    <string name="call_ended">Call ended</string>
+    <string name="call_transferring">Transferring to AI...</string>
+    <string name="call_connected">AI Agent Connected!</string>
+    <string name="call_duration">Call duration: %s</string>
+    <string name="call_warning_duration">Call will end in %d minutes</string>
+    
+    <!-- Permissions -->
+    <string name="permission_required">Permission Required</string>
+    <string name="permission_audio">Microphone permission is needed for voice recognition</string>
+    <string name="permission_phone">Phone permission is needed to handle calls</string>
+    <string name="permission_contacts">Contact permission is needed to show caller name</string>
+    <string name="permission_notification">Notification permission is needed for call alerts</string>
+    <string name="permission_denied">Permissions denied. Some features may not work.</string>
+    <string name="permission_all_granted">All permissions granted!</string>
+    
+    <!-- API / Network -->
+    <string name="error_no_internet">No internet connection. Please check your network.</string>
+    <string name="error_api_failed">Failed to get response. Please try again.</string>
+    <string name="error_api_timeout">Request timed out. Please try again.</string>
+    <string name="error_api_key">API key not configured. Please set your Groq API key.</string>
+    <string name="error_api_rate_limit">Rate limit exceeded. Please wait a moment.</string>
+    <string name="error_unknown">An unexpected error occurred.</string>
+    <string name="retrying">Retrying...</string>
+    
+    <!-- Speech -->
+    <string name="speech_not_available">Speech recognition not available</string>
+    <string name="speech_error">Speech recognition error</string>
+    <string name="did_not_understand">Sorry, I didn\'t understand.</string>
+    <string name="did_not_understand_bn">দুঃখিত। আমি বুঝতে পারিনি।</string>
+    <string name="speak_now">Speak now...</string>
+    <string name="listening_timeout">No speech detected. Listening again...</string>
+    
+    <!-- TTS -->
+    <string name="tts_not_available">Text-to-speech not available</string>
+    <string name="tts_fallback_en">Switching to English voice</string>
+    
+    <!-- Settings -->
+    <string name="settings">Settings</string>
+    <string name="language">Language</string>
+    <string name="language_english">English</string>
+    <string name="language_bengali">Bengali</string>
+    <string name="language_auto">Auto-detect</string>
+    <string name="auto_answer">Auto-answer calls</string>
+    <string name="api_key">API Key</string>
+    <string name="api_key_hint">Enter your Groq API key</string>
+    <string name="save">Save</string>
+    <string name="cancel">Cancel</string>
+    
+    <!-- Notifications -->
+    <string name="notification_channel_calls">Voice Agent Calls</string>
+    <string name="notification_channel_errors">Voice Agent Errors</string>
+    <string name="notification_monitoring">Monitoring calls...</string>
+    <string name="notification_action_answer">CONFIRM</string>
+    <string name="notification_action_dismiss">DISMISS</string>
+    
+    <!-- Errors -->
+    <string name="error_title">Error</string>
+    <string name="error_network_title">Network Error</string>
+    <string name="error_network_message">Please check your internet connection and try again.</string>
+    <string name="error_service_title">Service Error</string>
+    <string name="error_service_message">Failed to start call monitoring service.</string>
+    
+    <!-- Credits -->
+    <string name="powered_by">Powered by Groq AI</string>
+    <string name="version">Version %s</string>
+    
+    <!-- Actions -->
+    <string name="action_stop">Stop</string>
+    <string name="action_close">Close</string>
+    <string name="action_ok">OK</string>
+    <string name="action_retry">Retry</string>
+    <string name="action_open_settings">Open Settings</string>
 </resources>
